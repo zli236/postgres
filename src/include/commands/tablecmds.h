@@ -18,6 +18,7 @@
 #include "catalog/dependency.h"
 #include "catalog/objectaddress.h"
 #include "nodes/parsenodes.h"
+#include "parser/parse_node.h"
 #include "storage/lock.h"
 #include "utils/relcache.h"
 
@@ -27,7 +28,7 @@ struct AlterTableUtilityContext;	/* avoid including tcop/utility.h here */
 extern ObjectAddress DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 									ObjectAddress *typaddress, const char *queryString);
 
-extern void RemoveRelations(DropStmt *drop);
+extern void RemoveRelations(ParseState *pstate, DropStmt *drop, bool isTopLevel);
 
 extern Oid	AlterTableLookupRelation(AlterTableStmt *stmt, LOCKMODE lockmode);
 
