@@ -1268,13 +1268,6 @@ ProcessUtilitySlow(ParseState *pstate,
 		if (isCompleteQuery)
 			EventTriggerDDLCommandStart(parsetree);
 
-		/*
-		 * Consider logging the DDL command if logical logging is enabled and this is
-		 * a top level query.
-		 */
-		if (XLogLogicalInfoActive() && isTopLevel)
-			LogLogicalDDLCommand(parsetree, queryString);
-
 		switch (nodeTag(parsetree))
 		{
 				/*
@@ -2104,6 +2097,13 @@ ProcessUtilitySlow(ParseState *pstate,
 
 		if (isCompleteQuery)
 		{
+			/*
+			 * Consider logging the DDL command if logical logging is enabled and this is
+			 * a complete top level query.
+			 */
+			if (XLogLogicalInfoActive() && isTopLevel)
+				LogLogicalDDLCommand(parsetree, queryString);
+
 			EventTriggerSQLDrop(parsetree);
 			EventTriggerDDLCommandEnd(parsetree);
 		}

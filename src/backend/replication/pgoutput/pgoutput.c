@@ -54,6 +54,10 @@ static void pgoutput_message(LogicalDecodingContext *ctx,
 							 ReorderBufferTXN *txn, XLogRecPtr message_lsn,
 							 bool transactional, const char *prefix,
 							 Size sz, const char *message);
+static void pgoutput_ddlmessage(LogicalDecodingContext *ctx,
+								ReorderBufferTXN *txn, XLogRecPtr message_lsn,
+								bool transactional, const char *prefix, const char *role,
+								const char *search_path, Size sz, const char *message);
 static bool pgoutput_origin_filter(LogicalDecodingContext *ctx,
 								   RepOriginId origin_id);
 static void pgoutput_begin_prepare_txn(LogicalDecodingContext *ctx,
@@ -255,6 +259,7 @@ _PG_output_plugin_init(OutputPluginCallbacks *cb)
 	cb->change_cb = pgoutput_change;
 	cb->truncate_cb = pgoutput_truncate;
 	cb->message_cb = pgoutput_message;
+	cb->ddlmessage_cb = pgoutput_ddlmessage;
 	cb->commit_cb = pgoutput_commit_txn;
 
 	cb->begin_prepare_cb = pgoutput_begin_prepare_txn;
@@ -271,6 +276,7 @@ _PG_output_plugin_init(OutputPluginCallbacks *cb)
 	cb->stream_commit_cb = pgoutput_stream_commit;
 	cb->stream_change_cb = pgoutput_change;
 	cb->stream_message_cb = pgoutput_message;
+	cb->stream_ddlmessage_cb = pgoutput_ddlmessage;
 	cb->stream_truncate_cb = pgoutput_truncate;
 	/* transaction streaming - two-phase commit */
 	cb->stream_prepare_cb = pgoutput_stream_prepare_txn;
@@ -1650,8 +1656,8 @@ pgoutput_truncate(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 
 static void
 pgoutput_message(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
-				 XLogRecPtr message_lsn, bool transactional, const char *prefix, Size sz,
-				 const char *message)
+				 XLogRecPtr message_lsn, bool transactional,
+				 const char *prefix, Size sz, const char *message)
 {
 	PGOutputData *data = (PGOutputData *) ctx->output_plugin_private;
 	TransactionId xid = InvalidTransactionId;
@@ -1685,6 +1691,70 @@ pgoutput_message(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 							 message_lsn,
 							 transactional,
 							 prefix,
+							 sz,
+							 message);
+	OutputPluginWrite(ctx, true);
+}
+
+static void
+pgoutput_ddlmessage(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
+				 XLogRecPtr message_lsn, bool transactional,
+				 const char *prefix, const char * role,
+				 const char *search_path, Size sz, const char *message)
+{
+	PGOutputData *data = (PGOutputData *) ctx->output_plugin_private;
+	TransactionId xid = InvalidTransactionId;
+	ListCell *lc;
+
+	/* Reload publications if needed before use. */
+	if (!publications_valid)
+	{
+		MemoryContext oldctx = MemoryContextSwitchTo(CacheMemoryContext);
+		if (data->publications)
+			list_free_deep(data->publications);
+
+		data->publications = LoadPublications(data->publication_names);
+		MemoryContextSwitchTo(oldctx);
+		publications_valid = true;
+	}
+
+	/* Check if ddl replication is turned on for the publications */
+	foreach(lc, data->publications)
+	{
+		Publication *pub = (Publication *) lfirst(lc);
+		/* TODO need to check relid for table level DDLs */
+		if (!pub->pubactions.pubddl_database && !pub->pubactions.pubddl_table)
+			return;
+	}
+
+	/*
+	 * Remember the xid for the message in streaming mode. See
+	 * pgoutput_change.
+	 */
+	if (in_streaming)
+		xid = txn->xid;
+
+	/*
+	 * Output BEGIN if we haven't yet. Avoid for non-transactional
+	 * messages.
+	 */
+	if (transactional)
+	{
+		PGOutputTxnData *txndata = (PGOutputTxnData *) txn->output_plugin_private;
+
+		/* Send BEGIN if we haven't yet */
+		if (txndata && !txndata->sent_begin_txn)
+			pgoutput_send_begin(ctx, txn);
+	}
+
+	OutputPluginPrepareWrite(ctx, true);
+	logicalrep_write_ddlmessage(ctx->out,
+							 xid,
+							 message_lsn,
+							 transactional,
+							 prefix,
+							 role,
+							 search_path,
 							 sz,
 							 message);
 	OutputPluginWrite(ctx, true);
@@ -1975,7 +2045,9 @@ get_rel_sync_entry(PGOutputData *data, Relation relation)
 		entry->schema_sent = false;
 		entry->streamed_txns = NIL;
 		entry->pubactions.pubinsert = entry->pubactions.pubupdate =
-			entry->pubactions.pubdelete = entry->pubactions.pubtruncate = false;
+			entry->pubactions.pubdelete = entry->pubactions.pubtruncate =
+			entry->pubactions.pubddl_database =
+			entry->pubactions.pubddl_table = false;
 		entry->new_slot = NULL;
 		entry->old_slot = NULL;
 		memset(entry->exprstate, 0, sizeof(entry->exprstate));
@@ -2033,6 +2105,8 @@ get_rel_sync_entry(PGOutputData *data, Relation relation)
 		entry->pubactions.pubupdate = false;
 		entry->pubactions.pubdelete = false;
 		entry->pubactions.pubtruncate = false;
+		entry->pubactions.pubddl_database = false;
+		entry->pubactions.pubddl_table = false;
 
 		/*
 		 * Tuple slots cleanups. (Will be rebuilt later if needed).
@@ -2146,6 +2220,8 @@ get_rel_sync_entry(PGOutputData *data, Relation relation)
 				entry->pubactions.pubupdate |= pub->pubactions.pubupdate;
 				entry->pubactions.pubdelete |= pub->pubactions.pubdelete;
 				entry->pubactions.pubtruncate |= pub->pubactions.pubtruncate;
+				entry->pubactions.pubddl_database |= pub->pubactions.pubddl_database;
+				entry->pubactions.pubddl_table |= pub->pubactions.pubddl_table;
 
 				/*
 				 * We want to publish the changes as the top-most ancestor
