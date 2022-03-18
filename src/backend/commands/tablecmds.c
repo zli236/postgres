@@ -80,6 +80,7 @@
 #include "partitioning/partbounds.h"
 #include "partitioning/partdesc.h"
 #include "pgstat.h"
+#include "replication/ddlmessage.h"
 #include "rewrite/rewriteDefine.h"
 #include "rewrite/rewriteHandler.h"
 #include "rewrite/rewriteManip.h"
@@ -1333,13 +1334,14 @@ DropErrorMsgWrongType(const char *relname, char wrongkind, char rightkind)
  *		DROP MATERIALIZED VIEW, DROP FOREIGN TABLE
  */
 void
-RemoveRelations(DropStmt *drop)
+RemoveRelations(ParseState *pstate, DropStmt *drop, bool isTopLevel)
 {
 	ObjectAddresses *objects;
 	char		relkind;
 	ListCell   *cell;
 	int			flags = 0;
 	LOCKMODE	lockmode = AccessExclusiveLock;
+	bool		ddlxlog = XLogLogicalInfoActive();
 
 	/* DROP CONCURRENTLY uses a weaker lock, and has some restrictions */
 	if (drop->concurrent)
@@ -1438,8 +1440,35 @@ RemoveRelations(DropStmt *drop)
 		/* Not there? */
 		if (!OidIsValid(relOid))
 		{
+			ddlxlog = false;
 			DropErrorMsgNonExistent(rel, relkind, drop->missing_ok);
 			continue;
+		}
+
+		/*
+		 * Only log DROP RELATION cmd for logical replication if
+		 * there is any FOR ALL TABLES publication with pubddl_database on or
+		 * every relation to be dropped belongs to any non FOR ALL publications with pubddl_table on
+		 */
+		if (ddlxlog)
+		{
+			Oid tableOid = InvalidOid;
+
+			if (relkind == RELKIND_RELATION)
+				tableOid = relOid;
+			else if (relkind == RELKIND_INDEX)
+				tableOid = IndexGetRelation(relOid, true);
+			/*
+			 * Other relation types require database level ddl replication and are
+			 * already logged in LogLogicalDDLCommand() if needed.
+			 */
+			else
+				ddlxlog = false;
+
+			/* DROP RELATION or INDEX are allowed in table level DDL replication */
+			if (tableOid != InvalidOid &&
+				!ddl_need_xlog(tableOid, false, isTopLevel))
+				ddlxlog = false;
 		}
 
 		/*
@@ -1483,6 +1512,18 @@ RemoveRelations(DropStmt *drop)
 		obj.objectSubId = 0;
 
 		add_exact_object_address(&obj, objects);
+	}
+
+	/* Log the Drop command for logical replication */
+	if (ddlxlog)
+	{
+		bool transactional = true;
+		const char* prefix = "";
+		LogLogicalDDLMessage(prefix,
+							 GetUserId(),
+							 pstate->p_sourcetext,
+							 strlen(pstate->p_sourcetext),
+							 transactional);
 	}
 
 	performMultipleDeletions(objects, drop->behavior, flags);

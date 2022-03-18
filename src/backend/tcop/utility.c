@@ -62,6 +62,7 @@
 #include "miscadmin.h"
 #include "parser/parse_utilcmd.h"
 #include "postmaster/bgwriter.h"
+#include "replication/ddlmessage.h"
 #include "rewrite/rewriteDefine.h"
 #include "rewrite/rewriteRemove.h"
 #include "storage/fd.h"
@@ -86,7 +87,7 @@ static void ProcessUtilitySlow(ParseState *pstate,
 							   QueryEnvironment *queryEnv,
 							   DestReceiver *dest,
 							   QueryCompletion *qc);
-static void ExecDropStmt(DropStmt *stmt, bool isTopLevel);
+static void ExecDropStmt(ParseState *pstate, DropStmt *stmt, bool isTopLevel);
 
 /*
  * CommandIsReadOnly: is an executable query read-only?
@@ -987,7 +988,7 @@ standard_ProcessUtility(PlannedStmt *pstmt,
 									   context, params, queryEnv,
 									   dest, qc);
 				else
-					ExecDropStmt(stmt, isTopLevel);
+					ExecDropStmt(pstate, stmt, isTopLevel);
 			}
 			break;
 
@@ -1088,6 +1089,154 @@ standard_ProcessUtility(PlannedStmt *pstmt,
 }
 
 /*
+ * Log a DDL command for logical replication
+ * Some DDLs are only replicated in Database Level DDL replication
+ * Some can be replicated in Table Level DDL replication.
+ *
+ * Currently we focus on supporting Database Level DDL replication
+ */
+static void
+LogLogicalDDLCommand(Node *parsetree, const char *queryString)
+{
+	switch (nodeTag(parsetree))
+	{
+		/* Fisrtly, commands that are only supported in Database level DDL replication */
+		case T_CreateSchemaStmt:
+		case T_CreateStmt:
+		case T_CreateForeignTableStmt:
+		case T_AlterDomainStmt:
+		case T_DefineStmt:
+		case T_CompositeTypeStmt:
+		case T_CreateEnumStmt:
+		case T_CreateRangeStmt:
+		case T_AlterEnumStmt:
+		case T_ViewStmt:
+		case T_CreateFunctionStmt:
+		case T_AlterFunctionStmt:
+		case T_CreateTrigStmt:
+		case T_CreateDomainStmt:
+		case T_CreateCastStmt:
+		case T_CreateOpClassStmt:
+		case T_CreateOpFamilyStmt:
+		case T_AlterOpFamilyStmt:
+		case T_AlterOperatorStmt:
+		case T_AlterTypeStmt:
+		case T_GrantStmt:
+		case T_AlterCollationStmt:
+			/*
+			 * Log these stmt for logical replication if
+			 * there is any FOR ALL TABLES publication with pubddl_database on.
+			 * i.e. Database level DDL replication is on for some publication.
+			 */
+			if (ddl_need_xlog(InvalidOid, true, true))
+			{
+				bool transactional = true;
+				const char* prefix = "";
+				LogLogicalDDLMessage(prefix,
+									 GetUserId(),
+									 queryString,
+									 strlen(queryString),
+									 transactional);
+			}
+			break;
+
+		/*
+		 * Secondly, commands that may be allowed in Table level DDL replication.
+		 * These are currently handled in the later execution path of the command.
+		 * Because we need to get the relation id which readily available in later
+		 * code path.
+		 */
+		case T_AlterTableStmt:
+		case T_IndexStmt:
+		case T_RenameStmt: /* TODO */
+		case T_AlterOwnerStmt: /* TODO */
+			break;
+
+		/* DropStmt depends on the removeType */
+		case T_DropStmt:
+		{
+			DropStmt* stmt = (DropStmt*) parsetree;
+			switch (stmt->removeType)
+			{
+				/* Maybe allowed in Table level DDL replication, handled in later code path */
+				case OBJECT_INDEX:
+				case OBJECT_TABLE:
+					break;
+				/* Drop of sequence is by logical replication of sequences separately */
+				case OBJECT_SEQUENCE:
+					break;
+				/* Drop of other objects are allowed in Database level DDL replication only */
+				case OBJECT_VIEW:
+				case OBJECT_MATVIEW:
+				case OBJECT_FOREIGN_TABLE:
+				default:
+					/*
+					 * Log these DropStmt for logical replication if
+					 * there is any FOR ALL TABLES publication with pubddl_database on.
+					 * i.e. Database level DDL replication is on for some publication.
+					 */
+					if (ddl_need_xlog(InvalidOid, true, true))
+					{
+						bool transactional = true;
+						const char* prefix = "";
+						LogLogicalDDLMessage(prefix,
+											 GetUserId(),
+											 queryString,
+											 strlen(queryString),
+											 transactional);
+					}
+					break;
+			}
+		}
+		/*
+		 * Lastly, rule out DDLs we don't replicate yet in DDL replication
+		 * Some of these can be supported, we just need to investigate and run tests.
+		 */
+		case T_CreateExtensionStmt:
+		case T_AlterExtensionStmt:
+		case T_AlterExtensionContentsStmt:
+		case T_CreateFdwStmt:
+		case T_AlterFdwStmt:
+		case T_CreateForeignServerStmt:
+		case T_AlterForeignServerStmt:
+		case T_CreateUserMappingStmt:
+		case T_AlterUserMappingStmt:
+		case T_DropUserMappingStmt:
+		case T_ImportForeignSchemaStmt:
+		case T_RuleStmt:
+		case T_CreateSeqStmt:
+		case T_AlterSeqStmt:
+		case T_CreateTableAsStmt:
+		case T_RefreshMatViewStmt:
+		case T_CreatePLangStmt:
+		case T_CreateConversionStmt:
+		case T_CreateTransformStmt:
+		case T_AlterTSDictionaryStmt:
+		case T_AlterTSConfigurationStmt:
+		case T_AlterTableMoveAllStmt:
+		case T_AlterObjectDependsStmt:
+		case T_AlterObjectSchemaStmt:
+		case T_CommentStmt:
+		case T_DropOwnedStmt:
+		case T_AlterDefaultPrivilegesStmt:
+		case T_CreatePolicyStmt:
+		case T_AlterPolicyStmt:
+		case T_SecLabelStmt:
+		case T_CreateAmStmt:
+		case T_CreatePublicationStmt:
+		case T_AlterPublicationStmt:
+		case T_CreateSubscriptionStmt:
+		case T_AlterSubscriptionStmt:
+		case T_DropSubscriptionStmt:
+		case T_CreateStatsStmt:
+		case T_AlterStatsStmt:
+			break;
+		default:
+			break;
+	}
+}
+
+/*
  * The "Slow" variant of ProcessUtility should only receive statements
  * supported by the event triggers facility.  Therefore, we always
  * perform the trigger support calls if the context allows it.
@@ -1118,6 +1267,13 @@ ProcessUtilitySlow(ParseState *pstate,
 	{
 		if (isCompleteQuery)
 			EventTriggerDDLCommandStart(parsetree);
+
+		/*
+		 * Consider logging the DDL command if logical logging is enabled and this is
+		 * a top level query.
+		 */
+		if (XLogLogicalInfoActive() && isTopLevel)
+			LogLogicalDDLCommand(parsetree, queryString);
 
 		switch (nodeTag(parsetree))
 		{
@@ -1320,6 +1476,23 @@ ProcessUtilitySlow(ParseState *pstate,
 						/* ... ensure we have an event trigger context ... */
 						EventTriggerAlterTableStart(parsetree);
 						EventTriggerAlterTableRelid(relid);
+
+						/*
+						 * Log the ALTER TABLE command if
+						 * There is any publication with database level ddl on or
+						 * this TABLE belongs to any publication with table level ddl on
+						 */
+						if (XLogLogicalInfoActive() &&
+							ddl_need_xlog(relid, false, isTopLevel))
+						{
+							bool transactional = true;
+							const char* prefix = "";
+							LogLogicalDDLMessage(prefix,
+												 GetUserId(),
+												 queryString,
+												 strlen(queryString),
+												 transactional);
+						}
 
 						/* ... and do it */
 						AlterTable(atstmt, lockmode, &atcontext);
@@ -1539,6 +1712,24 @@ ProcessUtilitySlow(ParseState *pstate,
 
 					/* ... and do it */
 					EventTriggerAlterTableStart(parsetree);
+
+					/*
+					 * Log CREATE INDEX cmd for logical replication if
+					 * there is any publication with database level ddl on or
+					 * this TABLE belongs to any publication with table level ddl on.
+					 */
+					if (XLogLogicalInfoActive() &&
+						ddl_need_xlog(relid, false, isTopLevel))
+					{
+						bool transactional = true;
+						const char* prefix = "";
+						LogLogicalDDLMessage(prefix,
+											 GetUserId(),
+											 queryString,
+											 strlen(queryString),
+											 transactional);
+					}
+
 					address =
 						DefineIndex(relid,	/* OID of heap relation */
 									stmt,
@@ -1755,7 +1946,7 @@ ProcessUtilitySlow(ParseState *pstate,
 				break;
 
 			case T_DropStmt:
-				ExecDropStmt((DropStmt *) parsetree, isTopLevel);
+				ExecDropStmt(pstate, (DropStmt *) parsetree, isTopLevel);
 				/* no commands stashed for DROP */
 				commandCollected = true;
 				break;
@@ -1976,7 +2167,7 @@ ProcessUtilityForAlterTable(Node *stmt, AlterTableUtilityContext *context)
  * Dispatch function for DropStmt
  */
 static void
-ExecDropStmt(DropStmt *stmt, bool isTopLevel)
+ExecDropStmt(ParseState *pstate, DropStmt *stmt, bool isTopLevel)
 {
 	switch (stmt->removeType)
 	{
@@ -1991,7 +2182,7 @@ ExecDropStmt(DropStmt *stmt, bool isTopLevel)
 		case OBJECT_VIEW:
 		case OBJECT_MATVIEW:
 		case OBJECT_FOREIGN_TABLE:
-			RemoveRelations(stmt);
+			RemoveRelations(pstate, stmt, isTopLevel);
 			break;
 		default:
 			RemoveObjects(stmt);

@@ -672,10 +672,10 @@ CREATE PUBLICATION testpub_table_ins WITH (publish = 'insert, truncate');
 RESET client_min_messages;
 ALTER PUBLICATION testpub_table_ins ADD TABLE testpub_tbl5 (a);		-- ok
 \dRp+ testpub_table_ins
-                               Publication testpub_table_ins
-          Owner           | All tables | Inserts | Updates | Deletes | Truncates | Via root 
---------------------------+------------+---------+---------+---------+-----------+----------
- regress_publication_user | f          | t       | f       | f       | t         | f
+                                                   Publication testpub_table_ins
+          Owner           | All tables | Inserts | Updates | Deletes | Truncates | Via root | Database level DDL | Table level DDL 
+--------------------------+------------+---------+---------+---------+-----------+----------+--------------------+-----------------
+ regress_publication_user | f          | t       | f       | f       | t         | f        | f                  | f
 Tables:
     "public.testpub_tbl5" (a)
 
@@ -817,10 +817,10 @@ CREATE TABLE testpub_tbl_both_filters (a int, b int, c int, PRIMARY KEY (a,c));
 ALTER TABLE testpub_tbl_both_filters REPLICA IDENTITY USING INDEX testpub_tbl_both_filters_pkey;
 ALTER PUBLICATION testpub_both_filters ADD TABLE testpub_tbl_both_filters (a,c) WHERE (c != 1);
 \dRp+ testpub_both_filters
-                              Publication testpub_both_filters
-          Owner           | All tables | Inserts | Updates | Deletes | Truncates | Via root 
---------------------------+------------+---------+---------+---------+-----------+----------
- regress_publication_user | f          | t       | t       | t       | t         | f
+                                                 Publication testpub_both_filters
+          Owner           | All tables | Inserts | Updates | Deletes | Truncates | Via root | Database level DDL | Table level DDL 
+--------------------------+------------+---------+---------+---------+-----------+----------+--------------------+-----------------
+ regress_publication_user | f          | t       | t       | t       | t         | f        | f                  | f
 Tables:
     "public.testpub_tbl_both_filters" (a, c) WHERE (c <> 1)
 
