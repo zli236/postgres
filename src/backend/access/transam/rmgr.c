@@ -29,6 +29,7 @@
 #include "miscadmin.h"
 #include "replication/decode.h"
 #include "replication/message.h"
+#include "replication/ddlmessage.h"
 #include "replication/origin.h"
 #include "storage/standby.h"
 #include "utils/builtins.h"
