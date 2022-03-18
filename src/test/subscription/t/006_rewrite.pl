@@ -23,7 +23,7 @@ $node_subscriber->safe_psql('postgres', $ddl);
 my $publisher_connstr = $node_publisher->connstr . ' dbname=postgres';
 
 $node_publisher->safe_psql('postgres',
-	"CREATE PUBLICATION mypub FOR ALL TABLES;");
+	"CREATE PUBLICATION mypub FOR ALL TABLES WITH (ddl = '');");
 $node_subscriber->safe_psql('postgres',
 	"CREATE SUBSCRIPTION mysub CONNECTION '$publisher_connstr' PUBLICATION mypub;"
 );
