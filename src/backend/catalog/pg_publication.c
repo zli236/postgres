@@ -1206,3 +1206,55 @@ pg_get_publication_tables(PG_FUNCTION_ARGS)
 
 	SRF_RETURN_DONE(funcctx);
 }
+
+/*
+ * Checks if DDL on relation (relid) need xlog for logical replication
+ */
+bool
+ddl_need_xlog(Oid relid, bool forAllTabPubOnly, bool isTopLevel)
+{
+	List *allTablePubs = NIL;
+	List *tablePubs = NIL;
+	ListCell *lc;
+
+	/* Only replicate toplevel DDL command */
+	if (!isTopLevel)
+		return false;
+	if (relid == InvalidOid && !forAllTabPubOnly)
+		return false;
+
+	/*
+	 * Log the DDL command if
+	 * there is any FOR ALL TABLES publication with pubddl_database on
+	 * or
+	 * this TABLE belongs to any non FOR ALL publications with pubddl_table on
+	 */
+	allTablePubs = GetAllTablesPublications();
+	foreach(lc, allTablePubs)
+	{
+		Oid pubid = lfirst_oid(lc);
+		Publication *pub = GetPublication(pubid);
+
+		if (pub->pubactions.pubddl_database)
+			return true;
+	}
+
+	/*
+	 * If forAllTabPubOnly is true (i.e. database level replication is required for the DDL
+	 * to be logged), we can bail now since no publication has been found with pubddl_database on
+	 */
+	if (forAllTabPubOnly)
+		return false;
+
+	tablePubs = GetRelationPublications(relid);
+	foreach(lc, tablePubs)
+	{
+		Oid pubid = lfirst_oid(lc);
+		Publication *pub = GetPublication(pubid);
+
+		if (pub->pubactions.pubddl_table)
+			return true;
+	}
+
+	return false;
+}
