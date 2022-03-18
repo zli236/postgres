@@ -20,6 +20,7 @@
 #include "catalog/genbki.h"
 #include "catalog/objectaddress.h"
 #include "catalog/pg_publication_d.h"
+#include "tcop/utility.h"
 
 /* ----------------
  *		pg_publication definition.  cpp turns this into
@@ -54,6 +55,12 @@ CATALOG(pg_publication,6104,PublicationRelationId)
 
 	/* true if partition changes are published using root schema */
 	bool		pubviaroot;
+
+	/* true if database level ddls are published */
+	bool		pubddl_database;
+
+	/* true if table level ddls are published */
+	bool		pubddl_table;
 } FormData_pg_publication;
 
 /* ----------------
@@ -72,6 +79,8 @@ typedef struct PublicationActions
 	bool		pubupdate;
 	bool		pubdelete;
 	bool		pubtruncate;
+	bool		pubddl_database;
+	bool		pubddl_table;
 } PublicationActions;
 
 typedef struct PublicationDesc
@@ -146,5 +155,6 @@ extern ObjectAddress publication_add_schema(Oid pubid, Oid schemaid,
 
 extern Oid	get_publication_oid(const char *pubname, bool missing_ok);
 extern char *get_publication_name(Oid pubid, bool missing_ok);
+extern bool ddl_need_xlog(Oid relid, bool forAllTabPubOnly, bool isTopLevel);
 
 #endif							/* PG_PUBLICATION_H */

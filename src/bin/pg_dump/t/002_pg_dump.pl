@@ -2358,7 +2358,7 @@ my %tests = (
 		create_order => 50,
 		create_sql   => 'CREATE PUBLICATION pub1;',
 		regexp       => qr/^
-			\QCREATE PUBLICATION pub1 WITH (publish = 'insert, update, delete, truncate');\E
+			\QCREATE PUBLICATION pub1 WITH (publish = 'insert, update, delete, truncate', ddl = '');\E
 			/xm,
 		like => { %full_runs, section_post_data => 1, },
 	},
@@ -2367,9 +2367,9 @@ my %tests = (
 		create_order => 50,
 		create_sql   => 'CREATE PUBLICATION pub2
 						 FOR ALL TABLES
-						 WITH (publish = \'\');',
+						 WITH (publish = \'\', ddl = \'\');',
 		regexp => qr/^
-			\QCREATE PUBLICATION pub2 FOR ALL TABLES WITH (publish = '');\E
+			\QCREATE PUBLICATION pub2 FOR ALL TABLES WITH (publish = '', ddl = '');\E
 			/xm,
 		like => { %full_runs, section_post_data => 1, },
 	},
@@ -2378,7 +2378,7 @@ my %tests = (
 		create_order => 50,
 		create_sql   => 'CREATE PUBLICATION pub3;',
 		regexp => qr/^
-			\QCREATE PUBLICATION pub3 WITH (publish = 'insert, update, delete, truncate');\E
+			\QCREATE PUBLICATION pub3 WITH (publish = 'insert, update, delete, truncate', ddl = '');\E
 			/xm,
 		like => { %full_runs, section_post_data => 1, },
 	},
@@ -2387,7 +2387,7 @@ my %tests = (
 		create_order => 50,
 		create_sql   => 'CREATE PUBLICATION pub4;',
 		regexp => qr/^
-			\QCREATE PUBLICATION pub4 WITH (publish = 'insert, update, delete, truncate');\E
+			\QCREATE PUBLICATION pub4 WITH (publish = 'insert, update, delete, truncate', ddl = '');\E
 			/xm,
 		like => { %full_runs, section_post_data => 1, },
 	},

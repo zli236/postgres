@@ -857,6 +857,8 @@ GetPublication(Oid pubid)
 	pub->pubactions.pubdelete = pubform->pubdelete;
 	pub->pubactions.pubtruncate = pubform->pubtruncate;
 	pub->pubviaroot = pubform->pubviaroot;
+	pub->pubactions.pubddl_database = pubform->pubddl_database;
+	pub->pubactions.pubddl_table = pubform->pubddl_table;
 
 	ReleaseSysCache(tup);
 
