@@ -77,6 +77,11 @@ static void pg_decode_message(LogicalDecodingContext *ctx,
 							  ReorderBufferTXN *txn, XLogRecPtr message_lsn,
 							  bool transactional, const char *prefix,
 							  Size sz, const char *message);
+static void pg_decode_ddlmessage(LogicalDecodingContext *ctx,
+								 ReorderBufferTXN *txn, XLogRecPtr message_lsn,
+								 bool transactional, const char *prefix,
+								 const char *role, const char *search_path,
+								 Size sz, const char *message);
 static void pg_decode_sequence(LogicalDecodingContext *ctx,
 							  ReorderBufferTXN *txn, XLogRecPtr sequence_lsn,
 							  Relation rel, bool transactional,
@@ -121,6 +126,11 @@ static void pg_decode_stream_message(LogicalDecodingContext *ctx,
 									 ReorderBufferTXN *txn, XLogRecPtr message_lsn,
 									 bool transactional, const char *prefix,
 									 Size sz, const char *message);
+static void pg_decode_stream_ddlmessage(LogicalDecodingContext *ctx,
+										ReorderBufferTXN *txn, XLogRecPtr message_lsn,
+										bool transactional, const char *prefix,
+										const char *role, const char *search_path,
+										Size sz, const char *message);
 static void pg_decode_stream_sequence(LogicalDecodingContext *ctx,
 									  ReorderBufferTXN *txn, XLogRecPtr sequence_lsn,
 									  Relation rel, bool transactional,
@@ -150,6 +160,7 @@ _PG_output_plugin_init(OutputPluginCallbacks *cb)
 	cb->filter_by_origin_cb = pg_decode_filter;
 	cb->shutdown_cb = pg_decode_shutdown;
 	cb->message_cb = pg_decode_message;
+	cb->ddlmessage_cb = pg_decode_ddlmessage;
 	cb->sequence_cb = pg_decode_sequence;
 	cb->filter_prepare_cb = pg_decode_filter_prepare;
 	cb->begin_prepare_cb = pg_decode_begin_prepare_txn;
@@ -163,6 +174,7 @@ _PG_output_plugin_init(OutputPluginCallbacks *cb)
 	cb->stream_commit_cb = pg_decode_stream_commit;
 	cb->stream_change_cb = pg_decode_stream_change;
 	cb->stream_message_cb = pg_decode_stream_message;
+	cb->stream_ddlmessage_cb = pg_decode_stream_ddlmessage;
 	cb->stream_sequence_cb = pg_decode_stream_sequence;
 	cb->stream_truncate_cb = pg_decode_stream_truncate;
 }
@@ -758,7 +770,8 @@ pg_decode_truncate(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 static void
 pg_decode_message(LogicalDecodingContext *ctx,
 				  ReorderBufferTXN *txn, XLogRecPtr lsn, bool transactional,
-				  const char *prefix, Size sz, const char *message)
+				  const char *prefix, Size sz,
+				  const char *message)
 {
 	OutputPluginPrepareWrite(ctx, true);
 	appendStringInfo(ctx->out, "message: transactional: %d prefix: %s, sz: %zu content:",
@@ -796,6 +809,19 @@ pg_decode_sequence(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 													  RelationGetRelationName(rel)));
 	appendStringInfo(ctx->out, 	": transactional:%d last_value: " INT64_FORMAT " log_cnt: " INT64_FORMAT " is_called:%d",
 					 transactional, last_value, log_cnt, is_called);
+	OutputPluginWrite(ctx, true);
+}
+
+static void
+pg_decode_ddlmessage(LogicalDecodingContext *ctx,
+				  ReorderBufferTXN *txn, XLogRecPtr lsn, bool transactional,
+				  const char *prefix, const char *role, const char *search_path,
+				  Size sz, const char *message)
+{
+	OutputPluginPrepareWrite(ctx, true);
+	appendStringInfo(ctx->out, "DDL message: transactional: %d prefix: %s role: %s, search_path: %s, sz: %zu content:",
+					 transactional, prefix, role, search_path, sz);
+	appendBinaryStringInfo(ctx->out, message, sz);
 	OutputPluginWrite(ctx, true);
 }
 
@@ -979,7 +1005,8 @@ pg_decode_stream_change(LogicalDecodingContext *ctx,
 static void
 pg_decode_stream_message(LogicalDecodingContext *ctx,
 						 ReorderBufferTXN *txn, XLogRecPtr lsn, bool transactional,
-						 const char *prefix, Size sz, const char *message)
+						 const char *prefix, Size sz,
+						 const char *message)
 {
 	OutputPluginPrepareWrite(ctx, true);
 
@@ -991,7 +1018,35 @@ pg_decode_stream_message(LogicalDecodingContext *ctx,
 	else
 	{
 		appendStringInfo(ctx->out, "streaming message: transactional: %d prefix: %s, sz: %zu content:",
-						 transactional, prefix, sz);
+							 transactional, prefix, sz);
+		appendBinaryStringInfo(ctx->out, message, sz);
+	}
+
+	OutputPluginWrite(ctx, true);
+}
+
+/*
+ * In streaming mode, we don't display the contents for transactional messages
+ * as the transaction can abort at a later point in time.  We don't want users to
+ * see the message contents until the transaction is committed.
+ */
+static void
+pg_decode_stream_ddlmessage(LogicalDecodingContext *ctx,
+							ReorderBufferTXN *txn, XLogRecPtr lsn, bool transactional,
+							const char *prefix, const char * role, const char * search_path,
+							Size sz, const char *message)
+{
+	OutputPluginPrepareWrite(ctx, true);
+
+	if (transactional)
+	{
+		appendStringInfo(ctx->out, "streaming DDL message: transactional: %d prefix: %s role: %s, search_path: %s, sz: %zu",
+						 transactional, prefix, role, search_path, sz);
+	}
+	else
+	{
+		appendStringInfo(ctx->out, "streaming DDL message: transactional: %d prefix: %s role: %s, search_path: %s, sz: %zu content:",
+						 transactional, prefix, role, search_path, sz);
 		appendBinaryStringInfo(ctx->out, message, sz);
 	}
 

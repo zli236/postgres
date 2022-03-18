@@ -4,7 +4,7 @@ MODULES = test_decoding
 PGFILEDESC = "test_decoding - example of a logical decoding output plugin"
 
 REGRESS = ddl xact rewrite toast permissions decoding_in_xact \
-	decoding_into_rel binary prepared replorigin time messages \
+	decoding_into_rel binary prepared replorigin time messages ddlmessages\
 	spill slot truncate stream stats twophase twophase_stream \
 	sequence
 ISOLATION = mxact delayed_startup ondisk_startup concurrent_ddl_dml \

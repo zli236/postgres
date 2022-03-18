@@ -89,6 +89,19 @@ typedef void (*LogicalDecodeMessageCB) (struct LogicalDecodingContext *ctx,
 										const char *message);
 
 /*
+ * Called for the logical decoding DDL messages.
+ */
+typedef void (*LogicalDecodeDDLMessageCB) (struct LogicalDecodingContext *ctx,
+										   ReorderBufferTXN *txn,
+										   XLogRecPtr message_lsn,
+										   bool transactional,
+										   const char *prefix,
+										   const char *role,
+										   const char *search_path,
+										   Size message_size,
+										   const char *message);
+
+/*
  * Called for the generic logical decoding sequences.
  */
 typedef void (*LogicalDecodeSequenceCB) (struct LogicalDecodingContext *ctx,
@@ -212,6 +225,20 @@ typedef void (*LogicalDecodeStreamMessageCB) (struct LogicalDecodingContext *ctx
 											  const char *message);
 
 /*
+ * Callback for streaming logical decoding DDL messages from in-progress
+ * transactions.
+ */
+typedef void (*LogicalDecodeStreamDDLMessageCB) (struct LogicalDecodingContext *ctx,
+												 ReorderBufferTXN *txn,
+												 XLogRecPtr message_lsn,
+												 bool transactional,
+												 const char *prefix,
+												 const char *role,
+												 const char *search_path,
+												 Size message_size,
+												 const char *message);
+
+/*
  * Called for the streaming generic logical decoding sequences from in-progress
  * transactions.
  */
@@ -244,6 +271,7 @@ typedef struct OutputPluginCallbacks
 	LogicalDecodeTruncateCB truncate_cb;
 	LogicalDecodeCommitCB commit_cb;
 	LogicalDecodeMessageCB message_cb;
+	LogicalDecodeDDLMessageCB ddlmessage_cb;
 	LogicalDecodeSequenceCB sequence_cb;
 	LogicalDecodeFilterByOriginCB filter_by_origin_cb;
 	LogicalDecodeShutdownCB shutdown_cb;
@@ -263,6 +291,7 @@ typedef struct OutputPluginCallbacks
 	LogicalDecodeStreamCommitCB stream_commit_cb;
 	LogicalDecodeStreamChangeCB stream_change_cb;
 	LogicalDecodeStreamMessageCB stream_message_cb;
+	LogicalDecodeStreamDDLMessageCB stream_ddlmessage_cb;
 	LogicalDecodeStreamSequenceCB stream_sequence_cb;
 	LogicalDecodeStreamTruncateCB stream_truncate_cb;
 } OutputPluginCallbacks;
