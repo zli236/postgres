@@ -25,9 +25,9 @@ $node_subscriber2->start;
 my $publisher_connstr = $node_publisher->connstr . ' dbname=postgres';
 
 # publisher
-$node_publisher->safe_psql('postgres', "CREATE PUBLICATION pub1");
+$node_publisher->safe_psql('postgres', "CREATE PUBLICATION pub1 WITH (ddl = '')");
 $node_publisher->safe_psql('postgres',
-	"CREATE PUBLICATION pub_all FOR ALL TABLES");
+	"CREATE PUBLICATION pub_all FOR ALL TABLES WITH (ddl = '')");
 $node_publisher->safe_psql('postgres',
 	"CREATE TABLE tab1 (a int PRIMARY KEY, b text) PARTITION BY LIST (a)");
 $node_publisher->safe_psql('postgres',
@@ -425,12 +425,12 @@ $node_publisher->safe_psql('postgres',
 # and child tables are present but changes will be replicated via the parent's
 # identity and only once.
 $node_publisher->safe_psql('postgres',
-	"CREATE PUBLICATION pub_viaroot FOR TABLE tab2, tab2_1, tab3_1 WITH (publish_via_partition_root = true)"
+	"CREATE PUBLICATION pub_viaroot FOR TABLE tab2, tab2_1, tab3_1 WITH (publish_via_partition_root = true, ddl = '')"
 );
 
 # for tab4, we publish changes through the "middle" partitioned table
 $node_publisher->safe_psql('postgres',
-	"CREATE PUBLICATION pub_lower_level FOR TABLE tab4_1 WITH (publish_via_partition_root = true)"
+	"CREATE PUBLICATION pub_lower_level FOR TABLE tab4_1 WITH (publish_via_partition_root = true, ddl = '')"
 );
 
 # prepare data for the initial sync
