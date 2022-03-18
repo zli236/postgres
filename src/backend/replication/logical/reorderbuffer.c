@@ -512,6 +512,20 @@ ReorderBufferReturnChange(ReorderBuffer *rb, ReorderBufferChange *change,
 				pfree(change->data.msg.message);
 			change->data.msg.message = NULL;
 			break;
+		case REORDER_BUFFER_CHANGE_DDLMESSAGE:
+			if (change->data.ddlmsg.prefix != NULL)
+				pfree(change->data.ddlmsg.prefix);
+			change->data.ddlmsg.prefix = NULL;
+			if (change->data.ddlmsg.role != NULL)
+				pfree(change->data.ddlmsg.role);
+			change->data.ddlmsg.role = NULL;
+			if (change->data.ddlmsg.search_path != NULL)
+				pfree(change->data.ddlmsg.search_path);
+			change->data.ddlmsg.search_path = NULL;
+			if (change->data.ddlmsg.message != NULL)
+				pfree(change->data.ddlmsg.message);
+			change->data.ddlmsg.message = NULL;
+			break;
 		case REORDER_BUFFER_CHANGE_INVALIDATION:
 			if (change->data.inval.invalidations)
 				pfree(change->data.inval.invalidations);
@@ -854,6 +868,64 @@ ReorderBufferQueueMessage(ReorderBuffer *rb, TransactionId xid,
 		PG_TRY();
 		{
 			rb->message(rb, txn, lsn, false, prefix, message_size, message);
+
+			TeardownHistoricSnapshot(false);
+		}
+		PG_CATCH();
+		{
+			TeardownHistoricSnapshot(true);
+			PG_RE_THROW();
+		}
+		PG_END_TRY();
+	}
+}
+
+/*
+ * A transactional DDL message is queued to be processed upon commit and a
+ * non-transactional DDL message gets processed immediately.
+ */
+void
+ReorderBufferQueueDDLMessage(ReorderBuffer *rb, TransactionId xid,
+						  Snapshot snapshot, XLogRecPtr lsn,
+						  bool transactional, const char *prefix,
+						  const char *role, const char *search_path,
+						  Size message_size, const char *message)
+{
+	if (transactional)
+	{
+		MemoryContext oldcontext;
+		ReorderBufferChange *change;
+
+		Assert(xid != InvalidTransactionId);
+
+		oldcontext = MemoryContextSwitchTo(rb->context);
+
+		change = ReorderBufferGetChange(rb);
+		change->action = REORDER_BUFFER_CHANGE_DDLMESSAGE;
+		change->data.ddlmsg.prefix = pstrdup(prefix);
+		change->data.ddlmsg.role = pstrdup(role);
+		change->data.ddlmsg.search_path = pstrdup(search_path);
+		change->data.ddlmsg.message_size = message_size;
+		change->data.ddlmsg.message = palloc(message_size);
+		memcpy(change->data.ddlmsg.message, message, message_size);
+
+		ReorderBufferQueueChange(rb, xid, lsn, change, false);
+
+		MemoryContextSwitchTo(oldcontext);
+	}
+	else
+	{
+		ReorderBufferTXN *txn = NULL;
+		volatile Snapshot snapshot_now = snapshot;
+
+		if (xid != InvalidTransactionId)
+			txn = ReorderBufferTXNByXid(rb, xid, true, NULL, lsn, true);
+
+		/* setup snapshot to allow catalog access */
+		SetupHistoricSnapshot(snapshot_now, NULL);
+		PG_TRY();
+		{
+			rb->ddlmessage(rb, txn, lsn, false, prefix, role, search_path, message_size, message);
 
 			TeardownHistoricSnapshot(false);
 		}
@@ -1958,6 +2030,29 @@ ReorderBufferApplyMessage(ReorderBuffer *rb, ReorderBufferTXN *txn,
 }
 
 /*
+ * Helper function for ReorderBufferProcessTXN for applying the DDL message.
+ */
+static inline void
+ReorderBufferApplyDDLMessage(ReorderBuffer *rb, ReorderBufferTXN *txn,
+							 ReorderBufferChange *change, bool streaming)
+{
+	if (streaming)
+		rb->stream_ddlmessage(rb, txn, change->lsn, true,
+							  change->data.ddlmsg.prefix,
+							  change->data.ddlmsg.role,
+							  change->data.ddlmsg.search_path,
+							  change->data.ddlmsg.message_size,
+							  change->data.ddlmsg.message);
+	else
+		rb->ddlmessage(rb, txn, change->lsn, true,
+					   change->data.ddlmsg.prefix,
+					   change->data.ddlmsg.role,
+					   change->data.ddlmsg.search_path,
+					   change->data.ddlmsg.message_size,
+					   change->data.ddlmsg.message);
+}
+
+/*
  * Function to store the command id and snapshot at the end of the current
  * stream so that we can reuse the same while sending the next stream.
  */
@@ -2333,6 +2428,10 @@ ReorderBufferProcessTXN(ReorderBuffer *rb, ReorderBufferTXN *txn,
 
 				case REORDER_BUFFER_CHANGE_MESSAGE:
 					ReorderBufferApplyMessage(rb, txn, change, streaming);
+					break;
+
+				case REORDER_BUFFER_CHANGE_DDLMESSAGE:
+					ReorderBufferApplyDDLMessage(rb, txn, change, streaming);
 					break;
 
 				case REORDER_BUFFER_CHANGE_INVALIDATION:
@@ -3711,6 +3810,53 @@ ReorderBufferSerializeChange(ReorderBuffer *rb, ReorderBufferTXN *txn,
 
 				break;
 			}
+		case REORDER_BUFFER_CHANGE_DDLMESSAGE:
+			{
+				char	   *data;
+				Size		prefix_size = strlen(change->data.ddlmsg.prefix) + 1;
+				Size		role_size = strlen(change->data.ddlmsg.role) + 1;
+				Size		search_path_size = strlen(change->data.ddlmsg.search_path) + 1;
+
+				sz += prefix_size + role_size + search_path_size +
+					  change->data.ddlmsg.message_size +
+					  sizeof(Size) + sizeof(Size) + sizeof(Size) + sizeof(Size);
+				ReorderBufferSerializeReserve(rb, sz);
+
+				data = ((char *) rb->outbuf) + sizeof(ReorderBufferDiskChange);
+
+				/* might have been reallocated above */
+				ondisk = (ReorderBufferDiskChange *) rb->outbuf;
+
+				/* write the prefix including the size */
+				memcpy(data, &prefix_size, sizeof(Size));
+				data += sizeof(Size);
+				memcpy(data, change->data.ddlmsg.prefix,
+					   prefix_size);
+				data += prefix_size;
+
+				/* write the role including the size */
+				memcpy(data, &role_size, sizeof(Size));
+				data += sizeof(Size);
+				memcpy(data, change->data.ddlmsg.role,
+					   role_size);
+				data += role_size;
+
+				/* write the search_path including the size */
+				memcpy(data, &search_path_size, sizeof(Size));
+				data += sizeof(Size);
+				memcpy(data, change->data.ddlmsg.search_path,
+					   search_path_size);
+				data += search_path_size;
+
+				/* write the message including the size */
+				memcpy(data, &change->data.ddlmsg.message_size, sizeof(Size));
+				data += sizeof(Size);
+				memcpy(data, change->data.ddlmsg.message,
+					   change->data.ddlmsg.message_size);
+				data += change->data.ddlmsg.message_size;
+
+				break;
+			}
 		case REORDER_BUFFER_CHANGE_INVALIDATION:
 			{
 				char	   *data;
@@ -4025,6 +4171,18 @@ ReorderBufferChangeSize(ReorderBufferChange *change)
 
 				break;
 			}
+		case REORDER_BUFFER_CHANGE_DDLMESSAGE:
+			{
+				Size		prefix_size = strlen(change->data.ddlmsg.prefix) + 1;
+				Size		role_size = strlen(change->data.ddlmsg.role) + 1;
+				Size		search_path_size = strlen(change->data.ddlmsg.search_path) + 1;
+
+				sz += prefix_size + role_size + search_path_size +
+					change->data.ddlmsg.message_size +
+					sizeof(Size) + sizeof(Size) + sizeof(Size) + sizeof(Size);
+
+				break;
+			}
 		case REORDER_BUFFER_CHANGE_INVALIDATION:
 			{
 				sz += sizeof(SharedInvalidationMessage) *
@@ -4283,11 +4441,53 @@ ReorderBufferRestoreChange(ReorderBuffer *rb, ReorderBufferTXN *txn,
 				/* read prefix */
 				memcpy(&prefix_size, data, sizeof(Size));
 				data += sizeof(Size);
-				change->data.msg.prefix = MemoryContextAlloc(rb->context,
-															 prefix_size);
+				change->data.msg.prefix = MemoryContextAlloc(rb->context, prefix_size);
 				memcpy(change->data.msg.prefix, data, prefix_size);
 				Assert(change->data.msg.prefix[prefix_size - 1] == '\0');
 				data += prefix_size;
+
+				/* read the message */
+				memcpy(&change->data.msg.message_size, data, sizeof(Size));
+				data += sizeof(Size);
+				change->data.msg.message = MemoryContextAlloc(rb->context,
+															  change->data.msg.message_size);
+				memcpy(change->data.msg.message, data,
+					   change->data.msg.message_size);
+				data += change->data.msg.message_size;
+
+				break;
+			}
+		case REORDER_BUFFER_CHANGE_DDLMESSAGE:
+			{
+				Size		prefix_size;
+				Size		role_size;
+				Size		search_path_size;
+
+				/* read prefix */
+				memcpy(&prefix_size, data, sizeof(Size));
+				data += sizeof(Size);
+				change->data.ddlmsg.prefix = MemoryContextAlloc(rb->context, prefix_size);
+				memcpy(change->data.ddlmsg.prefix, data, prefix_size);
+				Assert(change->data.ddlmsg.prefix[prefix_size - 1] == '\0');
+				data += prefix_size;
+
+				/* read role */
+				memcpy(&role_size, data, sizeof(Size));
+				data += sizeof(Size);
+				change->data.ddlmsg.role = MemoryContextAlloc(rb->context,
+															  role_size);
+				memcpy(change->data.ddlmsg.role, data, role_size);
+				Assert(change->data.ddlmsg.role[role_size - 1] == '\0');
+				data += role_size;
+
+				/* read search_path */
+				memcpy(&search_path_size, data, sizeof(Size));
+				data += sizeof(Size);
+				change->data.ddlmsg.search_path = MemoryContextAlloc(rb->context,
+																	 search_path_size);
+				memcpy(change->data.ddlmsg.search_path, data, search_path_size);
+				Assert(change->data.ddlmsg.search_path[search_path_size - 1] == '\0');
+				data += search_path_size;
 
 				/* read the message */
 				memcpy(&change->data.msg.message_size, data, sizeof(Size));
