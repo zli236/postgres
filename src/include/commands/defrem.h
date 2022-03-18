@@ -15,6 +15,7 @@
 #define DEFREM_H
 
 #include "catalog/objectaddress.h"
+#include "catalog/pg_publication.h"
 #include "nodes/params.h"
 #include "parser/parse_node.h"
 #include "tcop/dest.h"
