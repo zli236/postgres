@@ -155,6 +155,7 @@
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
 #include "optimizer/optimizer.h"
+#include "parser/analyze.h"
 #include "pgstat.h"
 #include "postmaster/bgworker.h"
 #include "postmaster/interrupt.h"
@@ -179,6 +180,8 @@
 #include "storage/proc.h"
 #include "storage/procarray.h"
 #include "tcop/tcopprot.h"
+#include "tcop/pquery.h"
+#include "tcop/utility.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
 #include "utils/catcache.h"
@@ -329,6 +332,10 @@ static void apply_handle_tuple_routing(ApplyExecutionData *edata,
 									   TupleTableSlot *remoteslot,
 									   LogicalRepTupleData *newtup,
 									   CmdType operation);
+static void apply_execute_sql_command(const char *cmdstr,
+									  const char* role,
+									  const char* search_path,
+									  bool isTopLevel);
 
 /* Compute GID for two_phase transactions */
 static void TwoPhaseTransactionGid(Oid subid, TransactionId xid, char *gid, int szgid);
@@ -2360,6 +2367,259 @@ apply_handle_truncate(StringInfo s)
 	end_replication_step();
 }
 
+/*
+ * Handle generic messages.
+ */
+static void
+apply_handle_ddlmessage(StringInfo s)
+{
+	XLogRecPtr lsn;
+	bool transactional;
+	Size sz;
+	const char *prefix;
+	const char *role;
+	const char *search_path;
+	const char *msg;
+
+	msg = logicalrep_read_ddlmessage(s, &lsn, &prefix, &role, &search_path, &transactional, &sz);
+
+	apply_execute_sql_command(msg, role, search_path, true);
+}
+
+/*
+ * Add context to the errors produced by apply_execute_sql_command().
+ */
+static void
+execute_sql_command_error_cb(void *arg)
+{
+	errcontext("during execution of SQL statement: %s", (char *) arg);
+}
+
+/*
+ * Execute an SQL command. This can be multiple queries.
+ * This is modified based on pglogical_execute_sql_command().
+ */
+static void
+apply_execute_sql_command(const char *cmdstr, const char *role, const char *search_path,
+						  bool isTopLevel)
+{
+	const char *save_debug_query_string = debug_query_string;
+	List	   *parsetree_list;
+	ListCell   *parsetree_item;
+	MemoryContext oldcontext;
+	ErrorContextCallback errcallback;
+	int			save_nestlevel;
+
+	/*
+	 * Switch to appropriate context for constructing parsetrees.
+	 */
+	oldcontext = MemoryContextSwitchTo(ApplyMessageContext);
+	begin_replication_step();
+
+	/*
+	 * Set the current role to the user that executed the command on the
+	 * publication server.
+	 * Set the current search_path to the search_path on the publication
+	 * server when the command was executed.
+	 */
+	save_nestlevel = NewGUCNestLevel();
+	SetConfigOption("role", role, PGC_INTERNAL, PGC_S_OVERRIDE);
+	SetConfigOption("search_path", search_path, PGC_INTERNAL, PGC_S_OVERRIDE);
+
+	errcallback.callback = execute_sql_command_error_cb;
+	errcallback.arg = (char *) cmdstr;
+	errcallback.previous = error_context_stack;
+	error_context_stack = &errcallback;
+
+	debug_query_string = cmdstr;
+
+	parsetree_list = pg_parse_query(cmdstr);
+
+	/*
+	 * Do a limited amount of safety checking against CONCURRENTLY commands
+	 * executed in situations where they aren't allowed. The sender side should
+	 * provide protection, but better be safe than sorry.
+	 */
+	isTopLevel = isTopLevel && (list_length(parsetree_list) == 1);
+
+	/*
+	 * Switch back to transaction context to enter the loop.
+	 */
+	MemoryContextSwitchTo(oldcontext);
+
+	foreach(parsetree_item, parsetree_list)
+	{
+		List	   *plantree_list;
+		List	   *querytree_list;
+		RawStmt	   *command = (RawStmt *) lfirst(parsetree_item);
+		CommandTag	commandTag;
+		MemoryContext per_parsetree_context = NULL;
+		Portal		portal;
+		DestReceiver *receiver;
+		bool		 snapshot_set = false;
+		char 		 *schemaname = NULL; /* For CREATE TABLE stmt only */
+		char		 *relname = NULL; /* For CREATE TABLE stmt only */
+
+		commandTag = CreateCommandTag((Node *)command);
+
+		/*
+		 * Remember the schemaname and relname if it's a CREATE TABLE stmt
+		 * because we will need them for some post-processing after we
+		 * execute the stmt. At that point, CreateStmt may have been freeed up.
+		 */
+		if (commandTag == CMDTAG_CREATE_TABLE)
+		{
+			CreateStmt *cstmt = (CreateStmt *)command->stmt;
+			RangeVar *rv = cstmt->relation;
+			schemaname = rv->schemaname;
+			relname = rv->relname;
+		}
+
+		/*
+		 * Set up a snapshot if parse analysis/planning will need one.
+		 */
+		if (analyze_requires_snapshot(command))
+		{
+			PushActiveSnapshot(GetTransactionSnapshot());
+			snapshot_set = true;
+		}
+
+		/*
+		 * OK to analyze, rewrite, and plan this query.
+		 *
+		 * Switch to appropriate context for constructing query and plan trees
+		 * (these can't be in the transaction context, as that will get reset
+		 * when the command is COMMIT/ROLLBACK).  If we have multiple
+		 * parsetrees, we use a separate context for each one, so that we can
+		 * free that memory before moving on to the next one.  But for the
+		 * last (or only) parsetree, just use MessageContext, which will be
+		 * reset shortly after completion anyway.  In event of an error, the
+		 * per_parsetree_context will be deleted when MessageContext is reset.
+		 */
+		if (lnext(parsetree_list, parsetree_item) != NULL)
+		{
+			per_parsetree_context =
+				AllocSetContextCreate(MessageContext,
+									  "per-parsetree message context",
+									  ALLOCSET_DEFAULT_SIZES);
+			oldcontext = MemoryContextSwitchTo(per_parsetree_context);
+		}
+		else
+			oldcontext = MemoryContextSwitchTo(ApplyMessageContext);
+
+		querytree_list = pg_analyze_and_rewrite_fixedparams(
+			command,
+			cmdstr,
+			NULL, 0, NULL);
+
+		plantree_list = pg_plan_queries(
+			querytree_list, cmdstr, 0, NULL);
+
+		/*
+		 * Done with the snapshot used for parsing/planning.
+		 *
+		 * While it looks promising to reuse the same snapshot for query
+		 * execution (at least for simple protocol), unfortunately it causes
+		 * execution to use a snapshot that has been acquired before locking
+		 * any of the tables mentioned in the query.  This creates user-
+		 * visible anomalies, so refrain.  Refer to
+		 * https://postgr.es/m/flat/5075D8DF.6050500@fuzzy.cz for details.
+		 */
+		if (snapshot_set)
+			PopActiveSnapshot();
+
+		portal = CreatePortal("logical replication", true, true);
+
+		/*
+		 * We don't have to copy anything into the portal, because everything
+		 * we are passing here is in MessageContext or the
+		 * per_parsetree_context, and so will outlive the portal anyway.
+		 */
+		PortalDefineQuery(portal,
+						  NULL,
+						  cmdstr,
+						  commandTag,
+						  plantree_list,
+						  NULL);
+
+		/*
+		 * Start the portal.  No parameters here.
+		 */
+		PortalStart(portal, NULL, 0, InvalidSnapshot);
+
+		/* DestNone for logical replication */
+		receiver = CreateDestReceiver(DestNone);
+
+		/*
+		 * Switch back to transaction context for execution.
+		 */
+		MemoryContextSwitchTo(oldcontext);
+
+		(void) PortalRun(portal,
+						 FETCH_ALL,
+						 isTopLevel,
+						 true,
+						 receiver,
+						 receiver,
+						 NULL);
+		(*receiver->rDestroy) (receiver);
+
+		PortalDrop(portal, false);
+
+		CommandCounterIncrement();
+
+		/*
+		 * Table created by DDL replication (database level) is automatically
+		 * added to the subscription here.
+		 *
+		 * Call AddSubscriptionRelState for CREATE TABEL command to set
+		 * the relstate to SUBREL_STATE_INIT so DML changes on this
+		 * new table can be replicated without having to manually run
+		 * "alter subscription ... refresh publication"
+		 */
+		if (commandTag == CMDTAG_CREATE_TABLE)
+		{
+			Oid relid;
+			Oid relnamespace = InvalidOid;
+
+			if (schemaname != NULL)
+				relnamespace = get_namespace_oid(schemaname, false);
+			if (relnamespace != InvalidOid)
+				relid = get_relname_relid(relname, relnamespace);
+			else
+			{
+				/*
+				 * Try to resolve unqualified relname.
+				 * Notice we have set the search_path to the original search_path on the publisher
+				 * at the beginning of this function.
+				 */
+				relid = RelnameGetRelid(relname);
+			}
+
+			if (relid != InvalidOid)
+			{
+				AddSubscriptionRelState(MySubscription->oid, relid,
+										SUBREL_STATE_INIT,
+										InvalidXLogRecPtr);
+				ereport(DEBUG1,
+						(errmsg_internal("table \"%s\" added to subscription \"%s\"",
+										 relname, MySubscription->name)));
+			}
+		}
+	}
+
+	/*
+	 * Restore the GUC variables we set above.
+	 */
+	AtEOXact_GUC(true, save_nestlevel);
+
+	/* protect against stack resets during CONCURRENTLY processing */
+	if (error_context_stack == &errcallback)
+		error_context_stack = errcallback.previous;
+
+	debug_query_string = save_debug_query_string;
+	end_replication_step();
+}
 
 /*
  * Logical replication protocol message dispatcher.
@@ -2423,6 +2683,10 @@ apply_dispatch(StringInfo s)
 			 * Although, it could be used by other applications that use this
 			 * output plugin.
 			 */
+			break;
+
+		case LOGICAL_REP_MSG_DDLMESSAGE:
+			apply_handle_ddlmessage(s);
 			break;
 
 		case LOGICAL_REP_MSG_STREAM_START:

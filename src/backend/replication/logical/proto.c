@@ -626,8 +626,8 @@ logicalrep_read_truncate(StringInfo in,
  */
 void
 logicalrep_write_message(StringInfo out, TransactionId xid, XLogRecPtr lsn,
-						 bool transactional, const char *prefix, Size sz,
-						 const char *message)
+						 bool transactional, const char *prefix,
+						 Size sz, const char *message)
 {
 	uint8		flags = 0;
 
@@ -644,6 +644,63 @@ logicalrep_write_message(StringInfo out, TransactionId xid, XLogRecPtr lsn,
 	pq_sendint8(out, flags);
 	pq_sendint64(out, lsn);
 	pq_sendstring(out, prefix);
+	pq_sendint32(out, sz);
+	pq_sendbytes(out, message, sz);
+}
+
+/*
+ * Read DDL MESSAGE from stream
+ */
+const char *
+logicalrep_read_ddlmessage(StringInfo in, XLogRecPtr *lsn,
+						   const char **prefix,
+						   const char **role,
+						   const char **search_path,
+						   bool *transactional,
+						   Size *sz)
+{
+	uint8 flags;
+	const char *msg;
+
+	//TODO double check when do we need to get TransactionId.
+
+	flags = pq_getmsgint(in, 1);
+	*transactional = (flags & MESSAGE_TRANSACTIONAL) > 0;
+	*lsn = pq_getmsgint64(in);
+	*prefix = pq_getmsgstring(in);
+	*role = pq_getmsgstring(in);
+	*search_path = pq_getmsgstring(in);
+	*sz = pq_getmsgint(in, 4);
+	msg = pq_getmsgbytes(in, *sz);
+
+	return msg;
+}
+
+/*
+ * Write DDL MESSAGE to stream
+ */
+void
+logicalrep_write_ddlmessage(StringInfo out, TransactionId xid, XLogRecPtr lsn,
+						 bool transactional, const char *prefix, const char *role,
+						 const char *search_path, Size sz, const char *message)
+{
+	uint8		flags = 0;
+
+	pq_sendbyte(out, LOGICAL_REP_MSG_DDLMESSAGE);
+
+	/* encode and send message flags */
+	if (transactional)
+		flags |= MESSAGE_TRANSACTIONAL;
+
+	/* transaction ID (if not valid, we're not streaming) */
+	if (TransactionIdIsValid(xid))
+		pq_sendint32(out, xid);
+
+	pq_sendint8(out, flags);
+	pq_sendint64(out, lsn);
+	pq_sendstring(out, prefix);
+	pq_sendstring(out, role);
+	pq_sendstring(out, search_path);
 	pq_sendint32(out, sz);
 	pq_sendbytes(out, message, sz);
 }
@@ -1185,6 +1242,8 @@ logicalrep_message_type(LogicalRepMsgType action)
 			return "TYPE";
 		case LOGICAL_REP_MSG_MESSAGE:
 			return "MESSAGE";
+		case LOGICAL_REP_MSG_DDLMESSAGE:
+			return "DDL";
 		case LOGICAL_REP_MSG_BEGIN_PREPARE:
 			return "BEGIN PREPARE";
 		case LOGICAL_REP_MSG_PREPARE:
