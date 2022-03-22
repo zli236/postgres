@@ -1141,6 +1141,45 @@ LogLogicalDDLCommand(Node *parsetree, const char *queryString)
 			break;
 
 		/*
+		 * CreateTableAsStmt can create either a table a materialized view
+		 * and they are handled differently.
+		 */
+		case T_CreateTableAsStmt:
+		{
+			CreateTableAsStmt *stmt = (CreateTableAsStmt *) parsetree;
+			switch(stmt->objtype)
+			{
+				case OBJECT_TABLE:
+					/*
+					 * FIXME CREATE TABLE AS stmt needs to be broken down into two parts
+					 * 1. A normal CREATE TABLE string that get's logged and replicated via
+					 *	  DDL replication.
+					 * 2. Insertions that get replicated by DML replication.
+					 */
+					break;
+				case OBJECT_MATVIEW:
+					/*
+					 * Log CREATE MATERIALIZED VIEW AS stmt for logical replication if
+					 * there is any FOR ALL TABLES publication with pubddl_database on.
+					 * i.e. Database level DDL replication is on for some publication.
+					 */
+					if (ddl_need_xlog(InvalidOid, true, true))
+					{
+						bool transactional = true;
+						const char* prefix = "";
+						LogLogicalDDLMessage(prefix,
+											 GetUserId(),
+											 queryString,
+											 strlen(queryString),
+											 transactional);
+					}
+				default:
+					break;
+			}
+			break;
+		}
+
+		/*
 		 * Secondly, commands that may be allowed in Table level DDL replication.
 		 * These are currently handled in the later execution path of the command.
 		 * Because we need to get the relation id which readily available in later
@@ -1155,7 +1194,7 @@ LogLogicalDDLCommand(Node *parsetree, const char *queryString)
 		/* DropStmt depends on the removeType */
 		case T_DropStmt:
 		{
-			DropStmt* stmt = (DropStmt*) parsetree;
+			DropStmt *stmt = (DropStmt *) parsetree;
 			switch (stmt->removeType)
 			{
 				/* Maybe allowed in Table level DDL replication, handled in later code path */
@@ -1206,7 +1245,6 @@ LogLogicalDDLCommand(Node *parsetree, const char *queryString)
 		case T_RuleStmt:
 		case T_CreateSeqStmt:
 		case T_AlterSeqStmt:
-		case T_CreateTableAsStmt:
 		case T_RefreshMatViewStmt:
 		case T_CreatePLangStmt:
 		case T_CreateConversionStmt:

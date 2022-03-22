@@ -226,6 +226,24 @@ $node_publisher->wait_for_catchup('mysub');
 $result = $node_subscriber->safe_psql('postgres', "SELECT tableowner from pg_catalog.pg_tables where tablename = 't5';");
 is($result, qq(ddl_replication_user), 'Owner of t5 is correct');
 
+# Test CREATE MATERIALIZED VIEW stmt is replicated
+$node_publisher->safe_psql('postgres', "CREATE MATERIALIZED VIEW s1.matview1 AS SELECT a, b from s1.t1;");
+$result = $node_publisher->safe_psql('postgres', "SELECT count(*) from s1.matview1;");
+
+$node_publisher->wait_for_catchup('mysub');
+
+$result_sub = $node_subscriber->safe_psql('postgres', "SELECT count(*) from s1.matview1;");
+is($result, qq($result_sub), 'CREATE of s1.matview1 is replicated');
+
+# Test CREATE VIEW stmt is replicated
+$node_publisher->safe_psql('postgres', "CREATE VIEW s1.view1 AS SELECT a, b from s1.t1;");
+$result = $node_publisher->safe_psql('postgres', "SELECT count(*) from s1.view1;");
+
+$node_publisher->wait_for_catchup('mysub');
+
+$result_sub = $node_subscriber->safe_psql('postgres', "SELECT count(*) from s1.view1;");
+is($result, qq($result_sub), 'CREATE of s1.view1 is replicated');
+
 #TODO TEST certain DDLs are not replicated
 
 pass "DDL replication tests passed!";
