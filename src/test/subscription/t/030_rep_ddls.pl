@@ -244,6 +244,30 @@ $node_publisher->wait_for_catchup('mysub');
 $result_sub = $node_subscriber->safe_psql('postgres', "SELECT count(*) from s1.view1;");
 is($result, qq($result_sub), 'CREATE of s1.view1 is replicated');
 
+# TEST CREATE TABLE AS stmt
+$node_publisher->safe_psql('postgres', "CREATE TABLE s1.t3 AS SELECT a, b from s1.t1;");
+
+$node_publisher->wait_for_catchup('mysub');
+
+$result = $node_subscriber->safe_psql('postgres', "SELECT count(*) from s1.t3;");
+is($result, qq(2), 'CREATE TABLE s1.t3 AS is replicated with data');
+
+# TEST CREATE TABLE AS stmt ... WITH NO DATA
+$node_publisher->safe_psql('postgres', "CREATE TABLE s1.t4 AS SELECT a, b from s1.t1 WITH NO DATA;");
+
+$node_publisher->wait_for_catchup('mysub');
+
+$result = $node_subscriber->safe_psql('postgres', "SELECT count(*) from s1.t4;");
+is($result, qq(0), 'CREATE TABLE s1.t4 AS is replicated with no data');
+
+# TEST SELECT INTO stmt
+$node_publisher->safe_psql('postgres', "SELECT b into s1.t6 from s1.t1 where a > 1");
+
+$node_publisher->wait_for_catchup('mysub');
+
+$result = $node_subscriber->safe_psql('postgres', "SELECT count(*) from s1.t6;");
+is($result, qq(1), 'SELECT INTO s1.t6 is replicated with data');
+
 #TODO TEST certain DDLs are not replicated
 
 pass "DDL replication tests passed!";
