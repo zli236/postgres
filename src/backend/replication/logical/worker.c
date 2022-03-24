@@ -2542,22 +2542,57 @@ apply_execute_sql_command(const char *cmdstr, const char *role, const char *sear
 		Portal		portal;
 		DestReceiver *receiver;
 		bool		 snapshot_set = false;
-		char 		 *schemaname = NULL; /* For CREATE TABLE stmt only */
-		char		 *relname = NULL; /* For CREATE TABLE stmt only */
+		char 		 *schemaname = NULL; /* For CREATE TABLE and CREATE TABLE AS stmt only */
+		char		 *relname = NULL; /* For CREATE TABLE and CREATE TABLE AS stmt only */
 
 		commandTag = CreateCommandTag((Node *)command);
 
 		/*
-		 * Remember the schemaname and relname if it's a CREATE TABLE stmt
+		 * Remember the schemaname and relname if the cmd is going to create a table
 		 * because we will need them for some post-processing after we
-		 * execute the stmt. At that point, CreateStmt may have been freeed up.
+		 * execute the stmt. At that point, command->stmt may have been freeed up.
 		 */
 		if (commandTag == CMDTAG_CREATE_TABLE)
 		{
-			CreateStmt *cstmt = (CreateStmt *)command->stmt;
+			CreateStmt *cstmt = (CreateStmt *) command->stmt;
 			RangeVar *rv = cstmt->relation;
 			schemaname = rv->schemaname;
 			relname = rv->relname;
+		}
+		else if (commandTag == CMDTAG_CREATE_TABLE_AS)
+		{
+			CreateTableAsStmt *castmt = (CreateTableAsStmt *) command->stmt;
+
+			if (castmt->objtype == OBJECT_TABLE)
+			{
+				RangeVar *rv = castmt->into->rel;
+				schemaname = rv->schemaname;
+				relname = rv->relname;
+
+				/*
+				 * Force skipping data population to avoid data inconsistency.
+				 * Data should be replicated from the publisher instead.
+				 */
+				castmt->into->skipData = true;
+			}
+		}
+		/* SELECT INTO */
+		else if (commandTag == CMDTAG_SELECT)
+		{
+			SelectStmt *sstmt = (SelectStmt *) command->stmt;
+
+			if (sstmt->intoClause != NULL)
+			{
+				RangeVar *rv = sstmt->intoClause->rel;
+				schemaname = rv->schemaname;
+				relname = rv->relname;
+
+				/*
+				 * Force skipping data population to avoid data inconsistency.
+				 * Data should be replicated from the publisher instead.
+				 */
+				sstmt->intoClause->skipData = true;
+			}
 		}
 
 		/*
@@ -2657,12 +2692,12 @@ apply_execute_sql_command(const char *cmdstr, const char *role, const char *sear
 		 * Table created by DDL replication (database level) is automatically
 		 * added to the subscription here.
 		 *
-		 * Call AddSubscriptionRelState for CREATE TABEL command to set
-		 * the relstate to SUBREL_STATE_INIT so DML changes on this
+		 * Call AddSubscriptionRelState for CREATE TABEL and CREATE TABLE AS
+		 * command to set the relstate to SUBREL_STATE_INIT so DML changes on this
 		 * new table can be replicated without having to manually run
 		 * "alter subscription ... refresh publication"
 		 */
-		if (commandTag == CMDTAG_CREATE_TABLE)
+		if (relname != NULL)
 		{
 			Oid relid;
 			Oid relnamespace = InvalidOid;
