@@ -1142,24 +1142,31 @@ LogLogicalDDLCommand(Node *parsetree, const char *queryString)
 
 		/*
 		 * CreateTableAsStmt can create either a table a materialized view
-		 * and they are handled differently.
 		 */
 		case T_CreateTableAsStmt:
 		{
 			CreateTableAsStmt *stmt = (CreateTableAsStmt *) parsetree;
+
 			switch(stmt->objtype)
 			{
+				/*
+				 * Either CREATE TABLE AS or SELECT ... INTO stmt
+				 * The statement is logged as is, but when we apply the
+				 * CREATE TABLE AS or SELECT ... INTO statemtns on the logical
+				 * replication worker, we will force the skipData flag in the
+				 * intoClause. This way we avoid direct data population on the
+				 * subsriber with the execution of these commands which can
+				 * potentially cause data mismatch bewteen the publisher.
+				 *
+				 * The data sync will be handled by DML replication after the
+				 * target table has been created.
+				 */
 				case OBJECT_TABLE:
-					/*
-					 * FIXME CREATE TABLE AS stmt needs to be broken down into two parts
-					 * 1. A normal CREATE TABLE string that get's logged and replicated via
-					 *	  DDL replication.
-					 * 2. Insertions that get replicated by DML replication.
-					 */
-					break;
+
+				/* CREATE MATERIALIZED VIEW */
 				case OBJECT_MATVIEW:
 					/*
-					 * Log CREATE MATERIALIZED VIEW AS stmt for logical replication if
+					 * Log these stmt for logical replication if
 					 * there is any FOR ALL TABLES publication with pubddl_database on.
 					 * i.e. Database level DDL replication is on for some publication.
 					 */
@@ -1304,7 +1311,16 @@ ProcessUtilitySlow(ParseState *pstate,
 	PG_TRY();
 	{
 		if (isCompleteQuery)
+		{
 			EventTriggerDDLCommandStart(parsetree);
+
+			/*
+			 * Consider logging the DDL command if logical logging is enabled and this is
+			 * a complete top level query.
+			 */
+			if (XLogLogicalInfoActive() && isTopLevel)
+				LogLogicalDDLCommand(parsetree, queryString);
+		}
 
 		switch (nodeTag(parsetree))
 		{
@@ -2135,13 +2151,6 @@ ProcessUtilitySlow(ParseState *pstate,
 
 		if (isCompleteQuery)
 		{
-			/*
-			 * Consider logging the DDL command if logical logging is enabled and this is
-			 * a complete top level query.
-			 */
-			if (XLogLogicalInfoActive() && isTopLevel)
-				LogLogicalDDLCommand(parsetree, queryString);
-
 			EventTriggerSQLDrop(parsetree);
 			EventTriggerDDLCommandEnd(parsetree);
 		}
