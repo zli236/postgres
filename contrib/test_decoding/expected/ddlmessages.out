@@ -26,16 +26,16 @@ COMMIT;
 SELECT data FROM pg_logical_slot_get_changes('regression_slot', NULL, NULL, 'include-xids', '0', 'skip-empty-xacts', '1');
                                                                               data                                                                               
 -----------------------------------------------------------------------------------------------------------------------------------------------------------------
+ DDL message: transactional: 1 prefix:  role: ddl_replication_user, search_path: "$user", public, sz: 47 content:CREATE TABLE tab1 (id serial unique, data int);
  BEGIN
  sequence public.tab1_id_seq: transactional:1 last_value: 1 log_cnt: 0 is_called:0
- DDL message: transactional: 1 prefix:  role: ddl_replication_user, search_path: "$user", public, sz: 47 content:CREATE TABLE tab1 (id serial unique, data int);
  COMMIT
  DDL message: transactional: 1 prefix:  role: ddl_replication_user, search_path: "$user", public, sz: 32 content:ALTER TABLE tab1 add c3 varchar;
  DDL message: transactional: 1 prefix:  role: ddl_replication_user, search_path: "$user", public, sz: 25 content:ALTER TABLE tab1 drop c3;
  DDL message: transactional: 1 prefix:  role: ddl_replication_user, search_path: "$user", public, sz: 16 content:DROP TABLE tab1;
+ DDL message: transactional: 1 prefix:  role: ddl_replication_user, search_path: "$user", public, sz: 47 content:CREATE TABLE tab1 (id serial unique, data int);
  BEGIN
  sequence public.tab1_id_seq: transactional:1 last_value: 1 log_cnt: 0 is_called:0
- DDL message: transactional: 1 prefix:  role: ddl_replication_user, search_path: "$user", public, sz: 47 content:CREATE TABLE tab1 (id serial unique, data int);
  DDL message: transactional: 1 prefix:  role: ddl_replication_user, search_path: "$user", public, sz: 32 content:ALTER TABLE tab1 add c3 varchar;
  COMMIT
 (12 rows)
