@@ -1161,15 +1161,12 @@ pg_get_publication_tables(PG_FUNCTION_ARGS)
  * Checks if DDL on relation (relid) need xlog for logical replication
  */
 bool
-ddl_need_xlog(Oid relid, bool forAllTabPubOnly, bool isTopLevel)
+ddl_need_xlog(Oid relid, bool forAllTabPubOnly)
 {
 	List *allTablePubs = NIL;
 	List *tablePubs = NIL;
 	ListCell *lc;
 
-	/* Only replicate toplevel DDL command */
-	if (!isTopLevel)
-		return false;
 	if (relid == InvalidOid && !forAllTabPubOnly)
 		return false;
 

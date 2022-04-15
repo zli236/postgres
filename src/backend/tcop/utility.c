@@ -87,7 +87,8 @@ static void ProcessUtilitySlow(ParseState *pstate,
 							   QueryEnvironment *queryEnv,
 							   DestReceiver *dest,
 							   QueryCompletion *qc);
-static void ExecDropStmt(ParseState *pstate, DropStmt *stmt, bool isTopLevel);
+static void ExecDropStmt(ParseState *pstate, DropStmt *stmt, bool isTopLevel,
+						 bool isCompleteQuery);
 
 /*
  * CommandIsReadOnly: is an executable query read-only?
@@ -988,7 +989,7 @@ standard_ProcessUtility(PlannedStmt *pstmt,
 									   context, params, queryEnv,
 									   dest, qc);
 				else
-					ExecDropStmt(pstate, stmt, isTopLevel);
+					ExecDropStmt(pstate, stmt, isTopLevel, context != PROCESS_UTILITY_SUBCOMMAND);
 			}
 			break;
 
@@ -1128,7 +1129,7 @@ LogLogicalDDLCommand(Node *parsetree, const char *queryString)
 			 * there is any FOR ALL TABLES publication with pubddl_database on.
 			 * i.e. Database level DDL replication is on for some publication.
 			 */
-			if (ddl_need_xlog(InvalidOid, true, true))
+			if (ddl_need_xlog(InvalidOid, true))
 			{
 				bool transactional = true;
 				const char* prefix = "";
@@ -1170,7 +1171,7 @@ LogLogicalDDLCommand(Node *parsetree, const char *queryString)
 					 * there is any FOR ALL TABLES publication with pubddl_database on.
 					 * i.e. Database level DDL replication is on for some publication.
 					 */
-					if (ddl_need_xlog(InvalidOid, true, true))
+					if (ddl_need_xlog(InvalidOid, true))
 					{
 						bool transactional = true;
 						const char* prefix = "";
@@ -1221,7 +1222,7 @@ LogLogicalDDLCommand(Node *parsetree, const char *queryString)
 					 * there is any FOR ALL TABLES publication with pubddl_database on.
 					 * i.e. Database level DDL replication is on for some publication.
 					 */
-					if (ddl_need_xlog(InvalidOid, true, true))
+					if (ddl_need_xlog(InvalidOid, true))
 					{
 						bool transactional = true;
 						const char* prefix = "";
@@ -1318,7 +1319,7 @@ ProcessUtilitySlow(ParseState *pstate,
 			 * Consider logging the DDL command if logical logging is enabled and this is
 			 * a complete top level query.
 			 */
-			if (XLogLogicalInfoActive() && isTopLevel)
+			if (XLogLogicalInfoActive())
 				LogLogicalDDLCommand(parsetree, queryString);
 		}
 
@@ -1530,7 +1531,8 @@ ProcessUtilitySlow(ParseState *pstate,
 						 * this TABLE belongs to any publication with table level ddl on
 						 */
 						if (XLogLogicalInfoActive() &&
-							ddl_need_xlog(relid, false, isTopLevel))
+							isCompleteQuery &&
+							ddl_need_xlog(relid, false))
 						{
 							bool transactional = true;
 							const char* prefix = "";
@@ -1766,7 +1768,8 @@ ProcessUtilitySlow(ParseState *pstate,
 					 * this TABLE belongs to any publication with table level ddl on.
 					 */
 					if (XLogLogicalInfoActive() &&
-						ddl_need_xlog(relid, false, isTopLevel))
+						isCompleteQuery &&
+						ddl_need_xlog(relid, false))
 					{
 						bool transactional = true;
 						const char* prefix = "";
@@ -1993,7 +1996,7 @@ ProcessUtilitySlow(ParseState *pstate,
 				break;
 
 			case T_DropStmt:
-				ExecDropStmt(pstate, (DropStmt *) parsetree, isTopLevel);
+				ExecDropStmt(pstate, (DropStmt *) parsetree, isTopLevel, isCompleteQuery);
 				/* no commands stashed for DROP */
 				commandCollected = true;
 				break;
@@ -2214,7 +2217,8 @@ ProcessUtilityForAlterTable(Node *stmt, AlterTableUtilityContext *context)
  * Dispatch function for DropStmt
  */
 static void
-ExecDropStmt(ParseState *pstate, DropStmt *stmt, bool isTopLevel)
+ExecDropStmt(ParseState *pstate, DropStmt *stmt, bool isTopLevel,
+			 bool isCompleteQuery)
 {
 	switch (stmt->removeType)
 	{
@@ -2229,7 +2233,7 @@ ExecDropStmt(ParseState *pstate, DropStmt *stmt, bool isTopLevel)
 		case OBJECT_VIEW:
 		case OBJECT_MATVIEW:
 		case OBJECT_FOREIGN_TABLE:
-			RemoveRelations(pstate, stmt, isTopLevel);
+			RemoveRelations(pstate, stmt, isCompleteQuery);
 			break;
 		default:
 			RemoveObjects(stmt);
