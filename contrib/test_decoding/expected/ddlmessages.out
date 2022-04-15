@@ -11,7 +11,7 @@ SELECT 'init' FROM pg_create_logical_replication_slot('regression_slot', 'test_d
  init
 (1 row)
 
-CREATE TABLE test_ddlmessage (id serial unique, data int);
+CREATE TABLE test_ddlmessage (id serial unique primary key, data int);
 ALTER TABLE test_ddlmessage add c3 varchar;
 ALTER TABLE test_ddlmessage drop c3;
 DROP TABLE test_ddlmessage;
@@ -24,15 +24,53 @@ CREATE TABLE test_ddlmessage (id serial unique, data int);
 ALTER TABLE test_ddlmessage add c3 varchar;
 COMMIT;
 SELECT data FROM pg_logical_slot_get_changes('regression_slot', NULL, NULL, 'include-xids', '0', 'skip-empty-xacts', '1');
-                                                                                    data                                                                                    
-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
- DDL message: transactional: 1 prefix:  role: ddl_replication_user, search_path: "$user", public, sz: 58 content:CREATE TABLE test_ddlmessage (id serial unique, data int);
+                                                                                          data                                                                                          
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ DDL message: transactional: 1 prefix:  role: ddl_replication_user, search_path: "$user", public, sz: 70 content:CREATE TABLE test_ddlmessage (id serial unique primary key, data int);
  DDL message: transactional: 1 prefix:  role: ddl_replication_user, search_path: "$user", public, sz: 43 content:ALTER TABLE test_ddlmessage add c3 varchar;
  DDL message: transactional: 1 prefix:  role: ddl_replication_user, search_path: "$user", public, sz: 36 content:ALTER TABLE test_ddlmessage drop c3;
  DDL message: transactional: 1 prefix:  role: ddl_replication_user, search_path: "$user", public, sz: 27 content:DROP TABLE test_ddlmessage;
  DDL message: transactional: 1 prefix:  role: ddl_replication_user, search_path: "$user", public, sz: 58 content:CREATE TABLE test_ddlmessage (id serial unique, data int);
  DDL message: transactional: 1 prefix:  role: ddl_replication_user, search_path: "$user", public, sz: 43 content:ALTER TABLE test_ddlmessage add c3 varchar;
 (6 rows)
+
+-- Test logging DDL in function
+CREATE OR REPLACE FUNCTION func_ddl (tname varchar(20))
+RETURNS VOID AS $$
+BEGIN
+    execute format('CREATE TABLE %I(id int primary key, name varchar);', tname);
+    execute format('ALTER TABLE %I ADD c3 int', tname);
+    execute format('INSERT INTO %I VALUES (1, ''a'');', tname);
+    execute format('INSERT INTO %I VALUES (2, ''b'', 22);', tname);
+END;
+$$
+LANGUAGE plpgsql;
+SELECT func_ddl ('tab_from_func');
+ func_ddl 
+----------
+ 
+(1 row)
+
+SELECT data FROM pg_logical_slot_get_changes('regression_slot', NULL, NULL, 'include-xids', '0', 'skip-empty-xacts', '1');
+                                                                                     data                                                                                      
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ DDL message: transactional: 1 prefix:  role: ddl_replication_user, search_path: "$user", public, sz: 375 content:CREATE OR REPLACE FUNCTION func_ddl (tname varchar(20))     +
+ RETURNS VOID AS $$                                                                                                                                                           +
+ BEGIN                                                                                                                                                                        +
+     execute format('CREATE TABLE %I(id int primary key, name varchar);', tname);                                                                                             +
+     execute format('ALTER TABLE %I ADD c3 int', tname);                                                                                                                      +
+     execute format('INSERT INTO %I VALUES (1, ''a'');', tname);                                                                                                              +
+     execute format('INSERT INTO %I VALUES (2, ''b'', 22);', tname);                                                                                                          +
+ END;                                                                                                                                                                         +
+ $$                                                                                                                                                                           +
+ LANGUAGE plpgsql;
+ DDL message: transactional: 1 prefix:  role: ddl_replication_user, search_path: "$user", public, sz: 61 content:CREATE TABLE tab_from_func(id int primary key, name varchar);
+ DDL message: transactional: 1 prefix:  role: ddl_replication_user, search_path: "$user", public, sz: 36 content:ALTER TABLE tab_from_func ADD c3 int
+ BEGIN
+ table public.tab_from_func: INSERT: id[integer]:1 name[character varying]:'a' c3[integer]:null
+ table public.tab_from_func: INSERT: id[integer]:2 name[character varying]:'b' c3[integer]:22
+ COMMIT
+(7 rows)
 
 SELECT pg_drop_replication_slot('regression_slot');
  pg_drop_replication_slot 
@@ -41,4 +79,5 @@ SELECT pg_drop_replication_slot('regression_slot');
 (1 row)
 
 DROP TABLE test_ddlmessage;
+DROP TABLE tab_from_func;
 DROP publication mypub;

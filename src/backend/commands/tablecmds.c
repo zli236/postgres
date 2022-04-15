@@ -1333,14 +1333,14 @@ DropErrorMsgWrongType(const char *relname, char wrongkind, char rightkind)
  *		DROP MATERIALIZED VIEW, DROP FOREIGN TABLE
  */
 void
-RemoveRelations(ParseState *pstate, DropStmt *drop, bool isTopLevel)
+RemoveRelations(ParseState *pstate, DropStmt *drop, bool isCompleteQuery)
 {
 	ObjectAddresses *objects;
 	char		relkind;
 	ListCell   *cell;
 	int			flags = 0;
 	LOCKMODE	lockmode = AccessExclusiveLock;
-	bool		ddlxlog = XLogLogicalInfoActive();
+	bool		ddlxlog = XLogLogicalInfoActive() && isCompleteQuery;
 
 	/* DROP CONCURRENTLY uses a weaker lock, and has some restrictions */
 	if (drop->concurrent)
@@ -1466,7 +1466,7 @@ RemoveRelations(ParseState *pstate, DropStmt *drop, bool isTopLevel)
 
 			/* DROP RELATION or INDEX are allowed in table level DDL replication */
 			if (tableOid != InvalidOid &&
-				!ddl_need_xlog(tableOid, false, isTopLevel))
+				!ddl_need_xlog(tableOid, false))
 				ddlxlog = false;
 		}
 

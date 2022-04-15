@@ -348,6 +348,44 @@ $node_publisher->wait_for_catchup('mysub');
 $result = $node_subscriber->safe_psql('postgres', "SELECT count(*) FROM pg_catalog.pg_cast c, pg_catalog.pg_proc p WHERE p.proname='add' AND c.castfunc=p.oid;");
 is($result, qq(1), 'CreateCast Stmt is replicated');
 
+#TEST DDL in function
+$node_publisher->safe_psql('postgres', qq{
+CREATE OR REPLACE FUNCTION func_ddl (tname varchar(20))
+RETURNS VOID AS \$\$
+BEGIN
+    execute format('CREATE TABLE %I(id int primary key, name varchar);', tname);
+    execute format('ALTER TABLE %I ADD c3 int', tname);
+    execute format('INSERT INTO %I VALUES (1, ''a'');', tname);
+    execute format('INSERT INTO %I VALUES (2, ''b'', 22);', tname);
+END;
+\$\$
+LANGUAGE plpgsql;});
+
+$node_publisher->safe_psql('postgres', "SELECT func_ddl('func_table');");
+
+$node_publisher->wait_for_catchup('mysub');
+
+$result = $node_subscriber->safe_psql('postgres', "SELECT count(*) FROM s1.func_table where c3 = 22;");
+is($result, qq(1), 'DDLs in function are replicated');
+
+#TEST DDL in procedure
+$node_publisher->safe_psql('postgres', qq{
+CREATE OR REPLACE procedure proc_ddl (tname varchar(20))
+LANGUAGE plpgsql AS \$\$
+BEGIN
+    execute format('CREATE TABLE %I(id int primary key, name varchar);', tname);
+    execute format('ALTER TABLE %I ADD c3 int', tname);
+    execute format('INSERT INTO %I VALUES (1, ''a'');', tname);
+    execute format('INSERT INTO %I VALUES (2, ''b'', 22);', tname);
+END \$\$;});
+
+$node_publisher->safe_psql('postgres', "CALL proc_ddl('proc_table');");
+
+$node_publisher->wait_for_catchup('mysub');
+
+$result = $node_subscriber->safe_psql('postgres', "SELECT count(*) FROM s1.proc_table where c3 = 22;");
+is($result, qq(1), 'DDLs in procedure are replicated');
+
 #TODO TEST certain DDLs are not replicated
 
 pass "DDL replication tests passed!";

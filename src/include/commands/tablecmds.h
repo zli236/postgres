@@ -28,7 +28,8 @@ struct AlterTableUtilityContext;	/* avoid including tcop/utility.h here */
 extern ObjectAddress DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 									ObjectAddress *typaddress, const char *queryString);
 
-extern void RemoveRelations(ParseState *pstate, DropStmt *drop, bool isTopLevel);
+extern void RemoveRelations(ParseState *pstate, DropStmt *drop,
+							bool isCompleteQuery);
 
 extern Oid	AlterTableLookupRelation(AlterTableStmt *stmt, LOCKMODE lockmode);
 
