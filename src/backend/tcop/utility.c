@@ -1002,7 +1002,7 @@ standard_ProcessUtility(PlannedStmt *pstmt,
 									   context, params, queryEnv,
 									   dest, qc);
 				else
-					ExecRenameStmt(stmt);
+					ExecRenameStmt(pstate, stmt, context != PROCESS_UTILITY_SUBCOMMAND);
 			}
 			break;
 
@@ -1195,8 +1195,8 @@ LogLogicalDDLCommand(Node *parsetree, const char *queryString)
 		 */
 		case T_AlterTableStmt:
 		case T_IndexStmt:
-		case T_RenameStmt: /* TODO */
-		case T_AlterOwnerStmt: /* TODO */
+		case T_RenameStmt:
+		case T_AlterOwnerStmt: /* TODO, it is data control case, save for later update */
 			break;
 
 		/* DropStmt depends on the removeType */
@@ -2002,7 +2002,7 @@ ProcessUtilitySlow(ParseState *pstate,
 				break;
 
 			case T_RenameStmt:
-				address = ExecRenameStmt((RenameStmt *) parsetree);
+				address = ExecRenameStmt(pstate, (RenameStmt *) parsetree, isCompleteQuery);
 				break;
 
 			case T_AlterObjectDependsStmt:
