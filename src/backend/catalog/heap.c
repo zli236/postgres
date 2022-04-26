@@ -2328,7 +2328,17 @@ AddRelationNewConstraints(Relation rel,
 
 		/* If the DEFAULT is volatile we cannot use a missing value */
 		if (colDef->missingMode && contain_volatile_functions((Node *) expr))
+		{
 			colDef->missingMode = false;
+
+			if (XLogLogicalInfoActive() &&
+				ddl_need_xlog(rel->rd_id, false))
+			{
+				elog(ERROR,
+					 "cannot rewrite table using volatile functions in DDL statement when DDL replication is turned on. "
+					 "Please rewrite the DDL statement so it does not generate nondeterministic data.");
+			}
+		}
 
 		defOid = StoreAttrDefault(rel, colDef->attnum, expr, is_internal,
 								  colDef->missingMode);

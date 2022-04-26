@@ -244,7 +244,7 @@ $node_publisher->wait_for_catchup('mysub');
 $result_sub = $node_subscriber->safe_psql('postgres', "SELECT count(*) from s1.view1;");
 is($result, qq($result_sub), 'CREATE of s1.view1 is replicated');
 
-# TEST CREATE TABLE AS stmt
+# Test CREATE TABLE AS stmt
 $node_publisher->safe_psql('postgres', "CREATE TABLE s1.t3 AS SELECT a, b from s1.t1;");
 
 $node_publisher->wait_for_catchup('mysub');
@@ -252,7 +252,7 @@ $node_publisher->wait_for_catchup('mysub');
 $result = $node_subscriber->safe_psql('postgres', "SELECT count(*) from s1.t3;");
 is($result, qq(2), 'CREATE TABLE s1.t3 AS is replicated with data');
 
-# TEST CREATE TABLE AS stmt ... WITH NO DATA
+# Test CREATE TABLE AS stmt ... WITH NO DATA
 $node_publisher->safe_psql('postgres', "CREATE TABLE s1.t4 AS SELECT a, b from s1.t1 WITH NO DATA;");
 
 $node_publisher->wait_for_catchup('mysub');
@@ -260,7 +260,7 @@ $node_publisher->wait_for_catchup('mysub');
 $result = $node_subscriber->safe_psql('postgres', "SELECT count(*) from s1.t4;");
 is($result, qq(0), 'CREATE TABLE s1.t4 AS is replicated with no data');
 
-# TEST SELECT INTO stmt
+# Test SELECT INTO stmt
 $node_publisher->safe_psql('postgres', "SELECT b into s1.t6 from s1.t1 where a > 1");
 
 $node_publisher->wait_for_catchup('mysub');
@@ -268,7 +268,7 @@ $node_publisher->wait_for_catchup('mysub');
 $result = $node_subscriber->safe_psql('postgres', "SELECT count(*) from s1.t6;");
 is($result, qq(1), 'SELECT INTO s1.t6 is replicated with data');
 
-# TEST Create DomainStmt
+# Test Create DomainStmt
 $node_publisher->safe_psql('postgres', "CREATE DOMAIN s1.space_check AS VARCHAR NOT NULL CHECK (value !~ '\s');");
 
 $node_publisher->wait_for_catchup('mysub');
@@ -276,7 +276,7 @@ $node_publisher->wait_for_catchup('mysub');
 $result = $node_subscriber->safe_psql('postgres', "SELECT t.typnotnull from pg_catalog.pg_type t where t.typname='space_check';");
 is($result, qq(t), 'CreateDomain Stmt is replicatted');
 
-# TEST AlterDomainStmt
+# Test AlterDomainStmt
 $node_publisher->safe_psql('postgres', "Alter domain s1.space_check drop not null;");
 
 $node_publisher->wait_for_catchup('mysub');
@@ -284,7 +284,7 @@ $node_publisher->wait_for_catchup('mysub');
 $result = $node_subscriber->safe_psql('postgres', "SELECT t.typnotnull from pg_catalog.pg_type t where t.typname='space_check';");
 is($result, qq(f), 'ALTER DOMAIN Stmt is replicated');
 
-#TEST DEFINE Stmt
+#Test DEFINE Stmt
 $node_publisher->safe_psql('postgres', "CREATE AGGREGATE s1.inc_sum(int) (sfunc = int4pl,stype = int,initcond = 10);");
 
 $node_publisher->wait_for_catchup('mysub');
@@ -292,7 +292,7 @@ $node_publisher->wait_for_catchup('mysub');
 $result = $node_subscriber->safe_psql('postgres', "SELECT count(*) from pg_catalog.pg_proc p where p.proname='inc_sum';");
 is($result, qq(1), 'Define stmt is replicated');
 
-#TEST CompositeTypeStmt
+# Test CompositeTypeStmt
 $node_publisher->safe_psql('postgres', "CREATE TYPE s1.compfoo AS (f1 int, f2 text);");
 
 $node_publisher->wait_for_catchup('mysub');
@@ -300,7 +300,7 @@ $node_publisher->wait_for_catchup('mysub');
 $result = $node_subscriber->safe_psql('postgres', "SELECT count(*) from pg_catalog.pg_type t where t.typname='compfoo';");
 is($result, qq(1), 'CompositeType Stmt is replicated');
 
-#TEST CreateEnum Stmt
+# Test CreateEnum Stmt
 $node_publisher->safe_psql('postgres', "CREATE TYPE s1.mood AS ENUM ('sad', 'ok', 'happy');");
 
 $node_publisher->wait_for_catchup('mysub');
@@ -308,7 +308,7 @@ $node_publisher->wait_for_catchup('mysub');
 $result = $node_subscriber->safe_psql('postgres', "SELECT count(*) from pg_catalog.pg_type t where t.typname='mood';");
 is($result, qq(1), 'CreateEnumType Stmt is replicated');
 
-#TEST AlterEnum Stmt
+# Test AlterEnum Stmt
 $node_publisher->safe_psql('postgres', "ALTER TYPE s1.mood RENAME VALUE 'sad' to 'fine';");
 
 $node_publisher->wait_for_catchup('mysub');
@@ -316,7 +316,7 @@ $node_publisher->wait_for_catchup('mysub');
 $result = $node_subscriber->safe_psql('postgres', "SELECT count(*) FROM pg_catalog.pg_enum e, pg_catalog.pg_type t  WHERE e.enumtypid = t.oid AND t.typname='mood' AND e.enumlabel='fine';");
 is($result, qq(1), 'AlterEnumType Stmt is replicated');
 
-#TEST CreateRange Stmt
+# Test CreateRange Stmt
 $node_publisher->safe_psql('postgres', "CREATE TYPE floatrange AS RANGE (subtype = float8,subtype_diff = float8mi);");
 
 $node_publisher->wait_for_catchup('mysub');
@@ -324,7 +324,7 @@ $node_publisher->wait_for_catchup('mysub');
 $result = $node_subscriber->safe_psql('postgres', "SELECT count(*) from pg_catalog.pg_type t where t.typname='floatrange';");
 is($result, qq(1), 'CreateRange Stmt is replicated');
 
-#TEST VIEW Stmt
+# Test VIEW Stmt
 $node_publisher->safe_psql('postgres', "CREATE VIEW s1.vista AS SELECT 'Hello World';");
 
 $node_publisher->wait_for_catchup('mysub');
@@ -332,7 +332,7 @@ $node_publisher->wait_for_catchup('mysub');
 $result = $node_subscriber->safe_psql('postgres', "SELECT count(*) from pg_catalog.pg_class c where c.relname='vista';");
 is($result, qq(1), 'VIEW Stmt is replicated');
 
-#TEST CreateFunction Stmt
+# Test CreateFunction Stmt
 $node_publisher->safe_psql('postgres', "CREATE FUNCTION s1.add(a integer, b integer) RETURNS integer LANGUAGE SQL IMMUTABLE RETURN a + b;");
 
 $node_publisher->wait_for_catchup('mysub');
@@ -340,7 +340,7 @@ $node_publisher->wait_for_catchup('mysub');
 $result = $node_subscriber->safe_psql('postgres', "SELECT count(*) from pg_catalog.pg_proc p where p.proname='add';");
 is($result, qq(1), 'CreateFunction Stmt is replicated');
 
-#TEST CreateCast Stmt
+# Test CreateCast Stmt
 $node_publisher->safe_psql('postgres', "CREATE CAST (int AS int4) WITH FUNCTION add(int,int) AS ASSIGNMENT;");
 
 $node_publisher->wait_for_catchup('mysub');
@@ -348,7 +348,7 @@ $node_publisher->wait_for_catchup('mysub');
 $result = $node_subscriber->safe_psql('postgres', "SELECT count(*) FROM pg_catalog.pg_cast c, pg_catalog.pg_proc p WHERE p.proname='add' AND c.castfunc=p.oid;");
 is($result, qq(1), 'CreateCast Stmt is replicated');
 
-#TEST DDL in function
+# Test DDL in function
 $node_publisher->safe_psql('postgres', qq{
 CREATE OR REPLACE FUNCTION func_ddl (tname varchar(20))
 RETURNS VOID AS \$\$
@@ -368,7 +368,7 @@ $node_publisher->wait_for_catchup('mysub');
 $result = $node_subscriber->safe_psql('postgres', "SELECT count(*) FROM s1.func_table where c3 = 22;");
 is($result, qq(1), 'DDLs in function are replicated');
 
-#TEST DDL in procedure
+# Test DDL in procedure
 $node_publisher->safe_psql('postgres', qq{
 CREATE OR REPLACE procedure proc_ddl (tname varchar(20))
 LANGUAGE plpgsql AS \$\$
@@ -386,7 +386,24 @@ $node_publisher->wait_for_catchup('mysub');
 $result = $node_subscriber->safe_psql('postgres', "SELECT count(*) FROM s1.proc_table where c3 = 22;");
 is($result, qq(1), 'DDLs in procedure are replicated');
 
-#TODO TEST certain DDLs are not replicated
+# Test Alter table alter column type stmt is replicated
+$node_publisher->safe_psql('postgres', "ALTER TABLE test_rep ALTER COLUMN name type TEXT;");
+
+$node_publisher->wait_for_catchup('mysub');
+
+$result = $node_subscriber->safe_psql('postgres', "SELECT data_type FROM information_schema.columns WHERE table_name = 'test_rep' and column_name = 'name';");
+is($result, qq(text), 'Alter table column type stmt is replicated');
+
+# Test certain DDLs are not replicated
+# Test DDL statement that rewrites table with volatile functions are not replicated
+my $ret;
+my $stdout;
+my $stderr;
+($ret, $stdout, $stderr) = $node_publisher->psql('postgres', "ALTER TABLE test_rep ADD COLUMN bar double precision DEFAULT 3 * random();", $stderr, on_error_die => 0, on_error_stop => 0);
+
+ok( $stderr =~
+      m/ERROR:  cannot rewrite table using volatile functions in DDL statement when DDL replication is turned on. Please rewrite the DDL statement so it does not generate nondeterministic data./,
+    "Throws ERROR when executing: ALTER TABLE ADD COLUMN ... DEFAULT random().");
 
 pass "DDL replication tests passed!";
 
