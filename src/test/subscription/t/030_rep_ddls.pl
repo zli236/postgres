@@ -13,6 +13,11 @@ $node_publisher->init(allows_streaming => 'logical');
 $node_publisher->append_conf('postgresql.conf', 'autovacuum = off');
 $node_publisher->start;
 
+my $node_publisher2 = PostgreSQL::Test::Cluster->new('publisher2');
+$node_publisher2->init(allows_streaming => 'logical');
+$node_publisher2->append_conf('postgresql.conf', 'autovacuum = off');
+$node_publisher2->start;
+
 my $node_subscriber = PostgreSQL::Test::Cluster->new('subscriber');
 $node_subscriber->init(allows_streaming => 'logical');
 $node_subscriber->append_conf('postgresql.conf', 'autovacuum = off');
@@ -23,6 +28,11 @@ $node_subscriber2->init(allows_streaming => 'logical');
 $node_subscriber2->append_conf('postgresql.conf', 'autovacuum = off');
 $node_subscriber2->start;
 
+my $node_subscriber3 = PostgreSQL::Test::Cluster->new('subscriber3');
+$node_subscriber3->init(allows_streaming => 'logical');
+$node_subscriber3->append_conf('postgresql.conf', 'autovacuum = off');
+$node_subscriber3->start;
+
 my $ddl = "CREATE TABLE test_rep(id int primary key, name varchar);";
 $node_publisher->safe_psql('postgres', $ddl);
 $node_publisher->safe_psql('postgres', "INSERT INTO test_rep VALUES (1, 'data1');");
@@ -30,6 +40,7 @@ $node_subscriber->safe_psql('postgres', $ddl);
 $node_subscriber2->safe_psql('postgres', $ddl);
 
 my $publisher_connstr = $node_publisher->connstr . ' dbname=postgres';
+my $publisher_connstr2 = $node_publisher2->connstr . ' dbname=postgres';
 
 # mypub has pubddl_database on
 $node_publisher->safe_psql('postgres',
@@ -269,7 +280,7 @@ $result = $node_subscriber->safe_psql('postgres', "SELECT count(*) from s1.t6;")
 is($result, qq(1), 'SELECT INTO s1.t6 is replicated with data');
 
 # TEST Create DomainStmt
-$node_publisher->safe_psql('postgres', "CREATE DOMAIN s1.space_check AS VARCHAR NOT NULL CHECK (value !~ '\s');");
+$node_publisher->safe_psql('postgres', "CREATE DOMAIN s1.space_check AS VARCHAR NOT NULL CHECK (value !~ '\\s');");
 
 $node_publisher->wait_for_catchup('mysub');
 
@@ -348,6 +359,33 @@ $node_publisher->wait_for_catchup('mysub');
 $result = $node_subscriber->safe_psql('postgres', "SELECT count(*) FROM pg_catalog.pg_cast c, pg_catalog.pg_proc p WHERE p.proname='add' AND c.castfunc=p.oid;");
 is($result, qq(1), 'CreateCast Stmt is replicated');
 
+#TEST RenameStmt for FUNCTION
+$node_publisher->safe_psql('postgres', "ALTER FUNCTION add RENAME TO plus;");
+
+$node_publisher->wait_for_catchup('mysub');
+
+$result = $node_subscriber->safe_psql('postgres', "SELECT count(*) from pg_catalog.pg_proc p where p.proname='plus';");
+is($result, qq(1), 'RENAME FUNCTION Stmt is replicated');
+
+#TEST RenameStmt for table
+$node_publisher2->safe_psql('postgres', "CREATE TABLE t7 (id int primary key, name varchar);");
+$node_publisher2->safe_psql('postgres', "CREATE TABLE t8 (id int primary key, name varchar);");
+$node_publisher2->safe_psql('postgres',
+	"CREATE PUBLICATION mypub3 FOR TABLE t7 with (ddl = 'table');");
+$node_subscriber3->safe_psql('postgres', "CREATE TABLE t7 (id int primary key, name varchar);");
+$node_subscriber3->safe_psql('postgres', "CREATE TABLE t8 (id int primary key, name varchar);");
+$node_subscriber3->safe_psql('postgres',
+	"CREATE SUBSCRIPTION mysub3 CONNECTION '$publisher_connstr2' PUBLICATION mypub3;"
+);
+$node_publisher2->wait_for_catchup('mysub3');
+$node_publisher2->safe_psql('postgres', "ALTER TABLE t7 RENAME TO newt7;");
+$node_publisher2->wait_for_catchup('mysub3');
+$node_publisher2->safe_psql('postgres', "ALTER TABLE t8 RENAME TO newt8;");
+$result = $node_subscriber3->safe_psql('postgres', "SELECT count(*) from pg_tables where tablename = 'newt7';");
+is($result, qq(1), 'Rename t7 to newt7 is replicated');
+$result = $node_subscriber3->safe_psql('postgres', "SELECT count(*) from pg_tables where tablename = 'newt8';");
+is($result, qq(0), 'Rename t8 to newt8 is not replicated');
+
 #TEST DDL in function
 $node_publisher->safe_psql('postgres', qq{
 CREATE OR REPLACE FUNCTION func_ddl (tname varchar(20))
@@ -392,6 +430,8 @@ pass "DDL replication tests passed!";
 
 $node_subscriber->stop;
 $node_subscriber2->stop;
+$node_subscriber3->stop;
 $node_publisher->stop;
+$node_publisher2->stop;
 
 done_testing();
