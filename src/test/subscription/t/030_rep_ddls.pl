@@ -386,7 +386,29 @@ $node_publisher->wait_for_catchup('mysub');
 $result = $node_subscriber->safe_psql('postgres', "SELECT count(*) FROM s1.proc_table where c3 = 22;");
 is($result, qq(1), 'DDLs in procedure are replicated');
 
+# Test Alter table alter column type stmt is replicated
+$node_publisher->safe_psql('postgres', "ALTER TABLE test_rep ALTER COLUMN name type TEXT;");
+
+$node_publisher->wait_for_catchup('mysub');
+
+$result = $node_subscriber->safe_psql('postgres', "SELECT data_type FROM information_schema.columns WHERE table_name = 'test_rep' and column_name = 'name';");
+is($result, qq(text), 'Alter table column type stmt is replicated');
+
+# Test Alter table add column default 0.01 is replicated
+$node_publisher->safe_psql('postgres', "ALTER TABLE test_rep ADD COLUMN non_volatile double precision DEFAULT 0.01;");
+
+$node_publisher->wait_for_catchup('mysub');
+
+$result = $node_subscriber->safe_psql('postgres', "SELECT count(*) from test_rep where non_volatile = 0.01;");
+is($result, qq(2), 'Alter table add column default 0.01 is replicated');
+
 #TODO TEST certain DDLs are not replicated
+# Test DDL statement that rewrites table with volatile functions are not replicated
+$node_publisher->safe_psql('postgres', "ALTER TABLE test_rep ADD COLUMN volatile double precision DEFAULT 3 * random();");
+$result = $node_publisher->safe_psql('postgres', "SELECT count(*) FROM information_schema.columns WHERE table_name = 'test_rep' and column_name = 'volatile';");
+is($result, qq(1), 'Alter table add column default random() is executed on the publisher DB.');
+
+$result = $node_subscriber->wait_for_log("Do not support replication of DDL statement that rewrites table using volatile functions", $result);
 
 pass "DDL replication tests passed!";
 
