@@ -438,7 +438,6 @@ $result = $node_publisher->safe_psql('postgres', "SELECT count(*) FROM informati
 is($result, qq(1), 'Alter table add column default random() is executed on the publisher DB.');
 
 $result = $node_subscriber->wait_for_log("Do not support replication of DDL statement that rewrites table using volatile functions", $result);
->>>>>>> 7d28b2f868719ffaeaa3cb35bc21fef0b9c7d6ee
 
 pass "DDL replication tests passed!";
 
