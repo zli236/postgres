@@ -44,6 +44,8 @@ sub ParseHeader
 	$catalog{columns}     = [];
 	$catalog{toasting}    = [];
 	$catalog{indexing}    = [];
+	$catalog{other_oids}  = [];
+	$catalog{foreign_keys} = [];
 	$catalog{client_code} = [];
 
 	open(my $ifh, '<', $input_file) || die "$input_file: $!";
@@ -94,6 +96,17 @@ sub ParseHeader
 			push @{ $catalog{toasting} },
 			  { parent_table => $1, toast_oid => $2, toast_index_oid => $3 };
 		}
+		elsif (/^DECLARE_TOAST_WITH_MACRO\(\s*(\w+),\s*(\d+),\s*(\d+),\s*(\w+),\s*(\w+)\)/)
+		{
+			push @{ $catalog{toasting} },
+			  {
+				parent_table          => $1,
+				toast_oid             => $2,
+				toast_index_oid       => $3,
+				toast_oid_macro       => $4,
+				toast_index_oid_macro => $5
+			  };
+		}
 		elsif (
 			/^DECLARE_(UNIQUE_)?INDEX(_PKEY)?\(\s*(\w+),\s*(\d+),\s*(\w+),\s*(.+)\)/)
 		{
@@ -105,6 +118,14 @@ sub ParseHeader
 				index_oid  => $4,
 				index_oid_macro => $5,
 				index_decl => $6
+			  };
+		}
+		elsif (/^DECLARE_OID_DEFINING_MACRO\(\s*(\w+),\s*(\d+)\)/)
+		{
+			push @{ $catalog{other_oids} },
+			  {
+				other_name => $1,
+				other_oid  => $2
 			  };
 		}
 		elsif (
@@ -560,6 +581,10 @@ sub FindAllOidsFromHeaders
 		foreach my $index (@{ $catalog->{indexing} })
 		{
 			push @oids, $index->{index_oid};
+		}
+		foreach my $other (@{ $catalog->{other_oids} })
+		{
+			push @oids, $other->{other_oid};
 		}
 	}
 

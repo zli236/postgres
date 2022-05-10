@@ -4898,7 +4898,6 @@ timestamp_part_common(PG_FUNCTION_ARGS, bool retnumeric)
 								lowunits, format_type_be(TIMESTAMPOID))));
 				intresult = 0;
 		}
-
 	}
 	else
 	{
@@ -5123,7 +5122,6 @@ timestamptz_part_common(PG_FUNCTION_ARGS, bool retnumeric)
 								lowunits, format_type_be(TIMESTAMPTZOID))));
 				intresult = 0;
 		}
-
 	}
 	else if (type == RESERV)
 	{
@@ -5310,10 +5308,16 @@ interval_part_common(PG_FUNCTION_ARGS, bool retnumeric)
 			int64		secs_from_day_month;
 			int64		val;
 
-			/* this always fits into int64 */
-			secs_from_day_month = ((int64) DAYS_PER_YEAR * (interval->month / MONTHS_PER_YEAR) +
-								   (int64) DAYS_PER_MONTH * (interval->month % MONTHS_PER_YEAR) +
-								   interval->day) * SECS_PER_DAY;
+			/*
+			 * To do this calculation in integer arithmetic even though
+			 * DAYS_PER_YEAR is fractional, multiply everything by 4 and then
+			 * divide by 4 again at the end.  This relies on DAYS_PER_YEAR
+			 * being a multiple of 0.25 and on SECS_PER_DAY being a multiple
+			 * of 4.
+			 */
+			secs_from_day_month = ((int64) (4 * DAYS_PER_YEAR) * (interval->month / MONTHS_PER_YEAR) +
+								   (int64) (4 * DAYS_PER_MONTH) * (interval->month % MONTHS_PER_YEAR) +
+								   (int64) 4 * interval->day) * (SECS_PER_DAY / 4);
 
 			/*---
 			 * result = secs_from_day_month + interval->time / 1'000'000
@@ -5774,6 +5778,20 @@ generate_series_timestamp(PG_FUNCTION_ARGS)
 		MemoryContext oldcontext;
 		Interval	interval_zero;
 
+		/* Reject infinities in start and stop values */
+		if (TIMESTAMP_IS_NOBEGIN(start) ||
+			TIMESTAMP_IS_NOEND(start))
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("start value cannot be infinity")));
+		if (TIMESTAMP_IS_NOBEGIN(finish) ||
+			TIMESTAMP_IS_NOEND(finish))
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("stop value cannot be infinity")));
+
+		/* Interval doesn't (currently) have infinity, so nothing to check */
+
 		/* create a function context for cross-call persistence */
 		funcctx = SRF_FIRSTCALL_INIT();
 
@@ -5853,6 +5871,20 @@ generate_series_timestamptz(PG_FUNCTION_ARGS)
 		Interval   *step = PG_GETARG_INTERVAL_P(2);
 		MemoryContext oldcontext;
 		Interval	interval_zero;
+
+		/* Reject infinities in start and stop values */
+		if (TIMESTAMP_IS_NOBEGIN(start) ||
+			TIMESTAMP_IS_NOEND(start))
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("start value cannot be infinity")));
+		if (TIMESTAMP_IS_NOBEGIN(finish) ||
+			TIMESTAMP_IS_NOEND(finish))
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("stop value cannot be infinity")));
+
+		/* Interval doesn't (currently) have infinity, so nothing to check */
 
 		/* create a function context for cross-call persistence */
 		funcctx = SRF_FIRSTCALL_INIT();

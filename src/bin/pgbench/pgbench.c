@@ -3515,11 +3515,11 @@ printVerboseErrorMessages(CState *st, pg_time_usec_t *now, bool is_retry)
 					  (is_retry ?
 						"repeats the transaction after the error" :
 						"ends the failed transaction"));
-	appendPQExpBuffer(buf, " (try %d", st->tries);
+	appendPQExpBuffer(buf, " (try %u", st->tries);
 
 	/* Print max_tries if it is not unlimitted. */
 	if (max_tries)
-		appendPQExpBuffer(buf, "/%d", max_tries);
+		appendPQExpBuffer(buf, "/%u", max_tries);
 
 	/*
 	 * If the latency limit is used, print a percentage of the current transaction
@@ -4498,7 +4498,6 @@ doLog(TState *thread, CState *st,
 			int64		skipped = 0;
 			int64		serialization_failures = 0;
 			int64		deadlock_failures = 0;
-			int64		serialization_or_deadlock_failures = 0;
 			int64		retried = 0;
 			int64		retries = 0;
 
@@ -4540,9 +4539,7 @@ doLog(TState *thread, CState *st,
 				serialization_failures = agg->serialization_failures;
 				deadlock_failures = agg->deadlock_failures;
 			}
-			serialization_or_deadlock_failures = serialization_failures + deadlock_failures;
-			fprintf(logfile, " " INT64_FORMAT " " INT64_FORMAT " " INT64_FORMAT,
-					serialization_or_deadlock_failures,
+			fprintf(logfile, " " INT64_FORMAT " " INT64_FORMAT,
 					serialization_failures,
 					deadlock_failures);
 
@@ -4572,7 +4569,7 @@ doLog(TState *thread, CState *st,
 		if (throttle_delay)
 			fprintf(logfile, " %.0f", lag);
 		if (max_tries != 1)
-			fprintf(logfile, " %d", st->tries - 1);
+			fprintf(logfile, " %u", st->tries - 1);
 		fputc('\n', logfile);
 	}
 }
@@ -6265,7 +6262,7 @@ printResults(StatsData *total,
 	printf("number of threads: %d\n", nthreads);
 
 	if (max_tries)
-		printf("maximum number of tries: %d\n", max_tries);
+		printf("maximum number of tries: %u\n", max_tries);
 
 	if (duration <= 0)
 	{

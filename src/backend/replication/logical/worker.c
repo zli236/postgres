@@ -93,7 +93,7 @@
  * ReorderBufferFinishPrepared.
  *
  * If the subscription has no tables then a two_phase tri-state PENDING is
- * left unchanged. This lets the user still do an ALTER TABLE REFRESH
+ * left unchanged. This lets the user still do an ALTER SUBSCRIPTION REFRESH
  * PUBLICATION which might otherwise be disallowed (see below).
  *
  * If ever a user needs to be aware of the tri-state value, they can fetch it
@@ -157,6 +157,7 @@
 #include "nodes/makefuncs.h"
 #include "optimizer/optimizer.h"
 #include "parser/analyze.h"
+#include "parser/parse_expr.h"
 #include "pgstat.h"
 #include "postmaster/bgworker.h"
 #include "postmaster/interrupt.h"
@@ -607,7 +608,6 @@ slot_fill_defaults(LogicalRepRelMapEntry *rel, EState *estate,
 			defmap[num_defaults] = attnum;
 			num_defaults++;
 		}
-
 	}
 
 	for (i = 0; i < num_defaults; i++)
@@ -2548,6 +2548,8 @@ apply_execute_sql_command(const char *cmdstr, const char *role, const char *sear
 
 		commandTag = CreateCommandTag((Node *)command);
 
+		/* The following DDL commands need special handling */
+
 		/*
 		 * Remember the schemaname and relname if the cmd is going to create a table
 		 * because we will need them for some post-processing after we
@@ -2593,6 +2595,47 @@ apply_execute_sql_command(const char *cmdstr, const char *role, const char *sear
 				 * Data should be replicated from the publisher instead.
 				 */
 				sstmt->intoClause->skipData = true;
+			}
+		}
+		/*
+		 * ALTER TABLE ADD COLUMN col DEFAULT volatile_expr is not supported.
+		 * Until we support logical replication of table rewrite, see ATRewriteTables()
+		 * for details on table rewrite.
+		 */
+		else if (commandTag == CMDTAG_ALTER_TABLE)
+		{
+			AlterTableStmt *atstmt = (AlterTableStmt *) command->stmt;
+			ListCell *lc;
+
+			foreach(lc, atstmt->cmds)
+			{
+				AlterTableCmd *cmd = lfirst_node(AlterTableCmd, lc);
+
+				if (cmd->subtype == AT_AddColumn)
+				{
+					ColumnDef *colDef;
+					ListCell *c;
+
+					colDef = castNode(ColumnDef, cmd->def);
+					foreach(c, colDef->constraints)
+					{
+						Constraint *con = lfirst_node(Constraint, c);
+
+						if (con->contype == CONSTR_DEFAULT)
+						{
+							Node *expr;
+							ParseState *pstate = make_parsestate(NULL);
+
+							expr = transformExpr(pstate, copyObject(con->raw_expr), EXPR_KIND_COLUMN_DEFAULT);
+							if (contain_volatile_functions(expr))
+							{
+								elog(ERROR,
+									"Do not support replication of DDL statement that rewrites table using volatile functions: %s",
+									cmdstr);
+							}
+						}
+					}
+				}
 			}
 		}
 

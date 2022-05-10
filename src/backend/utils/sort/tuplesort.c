@@ -436,7 +436,11 @@ struct Tuplesortstate
 
 	/*
 	 * This variable is shared by the single-key MinimalTuple case and the
-	 * Datum case (which both use qsort_ssup()).  Otherwise it's NULL.
+	 * Datum case (which both use qsort_ssup()).  Otherwise, it's NULL.  The
+	 * presence of a value in this field is also checked by various sort
+	 * specialization functions as an optimization when comparing the leading
+	 * key in a tiebreak situation to determine if there are any subsequent
+	 * keys to sort on.
 	 */
 	SortSupport onlyKey;
 
@@ -701,6 +705,13 @@ qsort_tuple_unsigned_compare(SortTuple *a, SortTuple *b, Tuplesortstate *state)
 	if (compare != 0)
 		return compare;
 
+	/*
+	 * No need to waste effort calling the tiebreak function when there are
+	 * no other keys to sort on.
+	 */
+	if (state->onlyKey != NULL)
+		return 0;
+
 	return state->comparetup(a, b, state);
 }
 
@@ -713,8 +724,16 @@ qsort_tuple_signed_compare(SortTuple *a, SortTuple *b, Tuplesortstate *state)
 	compare = ApplySignedSortComparator(a->datum1, a->isnull1,
 										b->datum1, b->isnull1,
 										&state->sortKeys[0]);
+
 	if (compare != 0)
 		return compare;
+
+	/*
+	 * No need to waste effort calling the tiebreak function when there are
+	 * no other keys to sort on.
+	 */
+	if (state->onlyKey != NULL)
+		return 0;
 
 	return state->comparetup(a, b, state);
 }
@@ -728,8 +747,16 @@ qsort_tuple_int32_compare(SortTuple *a, SortTuple *b, Tuplesortstate *state)
 	compare = ApplyInt32SortComparator(a->datum1, a->isnull1,
 										b->datum1, b->isnull1,
 										&state->sortKeys[0]);
+
 	if (compare != 0)
 		return compare;
+
+	/*
+	 * No need to waste effort calling the tiebreak function when there are
+	 * no other keys to sort on.
+	 */
+	if (state->onlyKey != NULL)
+		return 0;
 
 	return state->comparetup(a, b, state);
 }
@@ -1051,7 +1078,7 @@ tuplesort_begin_heap(TupleDesc tupDesc,
 		sortKey->ssup_nulls_first = nullsFirstFlags[i];
 		sortKey->ssup_attno = attNums[i];
 		/* Convey if abbreviation optimization is applicable in principle */
-		sortKey->abbreviate = (i == 0);
+		sortKey->abbreviate = (i == 0 && state->haveDatum1);
 
 		PrepareSortSupportFromOrderingOp(sortOperators[i], sortKey);
 	}
@@ -1157,7 +1184,7 @@ tuplesort_begin_cluster(TupleDesc tupDesc,
 			(scanKey->sk_flags & SK_BT_NULLS_FIRST) != 0;
 		sortKey->ssup_attno = scanKey->sk_attno;
 		/* Convey if abbreviation optimization is applicable in principle */
-		sortKey->abbreviate = (i == 0);
+		sortKey->abbreviate = (i == 0 && state->haveDatum1);
 
 		AssertState(sortKey->ssup_attno != 0);
 
@@ -1238,7 +1265,7 @@ tuplesort_begin_index_btree(Relation heapRel,
 			(scanKey->sk_flags & SK_BT_NULLS_FIRST) != 0;
 		sortKey->ssup_attno = scanKey->sk_attno;
 		/* Convey if abbreviation optimization is applicable in principle */
-		sortKey->abbreviate = (i == 0);
+		sortKey->abbreviate = (i == 0 && state->haveDatum1);
 
 		AssertState(sortKey->ssup_attno != 0);
 
@@ -1348,7 +1375,7 @@ tuplesort_begin_index_gist(Relation heapRel,
 		sortKey->ssup_nulls_first = false;
 		sortKey->ssup_attno = i + 1;
 		/* Convey if abbreviation optimization is applicable in principle */
-		sortKey->abbreviate = (i == 0);
+		sortKey->abbreviate = (i == 0 && state->haveDatum1);
 
 		AssertState(sortKey->ssup_attno != 0);
 
@@ -3186,7 +3213,6 @@ mergeonerun(Tuplesortstate *state)
 		{
 			stup.srctape = srcTapeIndex;
 			tuplesort_heap_replace_top(state, &stup);
-
 		}
 		else
 		{

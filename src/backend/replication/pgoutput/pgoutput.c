@@ -1071,8 +1071,7 @@ pgoutput_column_list_init(PGOutputData *data, List *publications,
 		}
 
 		ReleaseSysCache(cftuple);
-	}	/* loop all subscribed publications */
-
+	}							/* loop all subscribed publications */
 }
 
 /*
