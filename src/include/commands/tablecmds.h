@@ -74,7 +74,7 @@ extern ObjectAddress renameatt(RenameStmt *stmt);
 
 extern ObjectAddress RenameConstraint(RenameStmt *stmt);
 
-extern ObjectAddress RenameRelation(RenameStmt *stmt);
+extern ObjectAddress RenameRelation(ParseState *pstate, RenameStmt *stmt, bool isCompleteQuery);
 
 extern void RenameRelationInternal(Oid myrelid,
 								   const char *newrelname, bool is_internal,

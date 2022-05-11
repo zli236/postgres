@@ -3820,11 +3820,12 @@ RenameConstraint(RenameStmt *stmt)
  * RENAME
  */
 ObjectAddress
-RenameRelation(RenameStmt *stmt)
+RenameRelation(ParseState *pstate, RenameStmt *stmt, bool isCompleteQuery)
 {
 	bool		is_index_stmt = stmt->renameType == OBJECT_INDEX;
 	Oid			relid;
 	ObjectAddress address;
+	bool		ddlxlog = XLogLogicalInfoActive() && isCompleteQuery;
 
 	/*
 	 * Grab an exclusive lock on the target table, index, sequence, view,
@@ -3870,6 +3871,18 @@ RenameRelation(RenameStmt *stmt)
 
 		UnlockRelationOid(relid, lockmode);
 		is_index_stmt = obj_is_index;
+	}
+
+	if (ddlxlog &&
+		ddl_need_xlog(relid, false))
+	{
+		bool transactional = true;
+		const char* prefix = "";
+		LogLogicalDDLMessage(prefix,
+							 GetUserId(),
+							 pstate->p_sourcetext,
+							 strlen(pstate->p_sourcetext),
+							 transactional);
 	}
 
 	/* Do the work */

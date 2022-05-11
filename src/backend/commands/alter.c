@@ -328,7 +328,8 @@ AlterObjectRename_internal(Relation rel, Oid objectId, const char *new_name)
  * Return value is the address of the renamed object.
  */
 ObjectAddress
-ExecRenameStmt(RenameStmt *stmt)
+ExecRenameStmt(ParseState *pstate, RenameStmt *stmt,
+				bool isCompleteQuery)
 {
 	switch (stmt->renameType)
 	{
@@ -354,7 +355,7 @@ ExecRenameStmt(RenameStmt *stmt)
 		case OBJECT_MATVIEW:
 		case OBJECT_INDEX:
 		case OBJECT_FOREIGN_TABLE:
-			return RenameRelation(stmt);
+			return RenameRelation(pstate, stmt, isCompleteQuery);
 
 		case OBJECT_COLUMN:
 		case OBJECT_ATTRIBUTE:
