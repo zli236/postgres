@@ -30,7 +30,6 @@ $node_subscriber->safe_psql('postgres', $ddl);
 $node_subscriber2->safe_psql('postgres', $ddl);
 
 my $publisher_connstr = $node_publisher->connstr . ' dbname=postgres';
-
 # mypub has pubddl_database on
 $node_publisher->safe_psql('postgres',
 	"CREATE PUBLICATION mypub FOR ALL TABLES;");
@@ -269,7 +268,7 @@ $result = $node_subscriber->safe_psql('postgres', "SELECT count(*) from s1.t6;")
 is($result, qq(1), 'SELECT INTO s1.t6 is replicated with data');
 
 # TEST Create DomainStmt
-$node_publisher->safe_psql('postgres', "CREATE DOMAIN s1.space_check AS VARCHAR NOT NULL CHECK (value !~ '\s');");
+$node_publisher->safe_psql('postgres', "CREATE DOMAIN s1.space_check AS VARCHAR NOT NULL CHECK (value !~ '\\s');");
 
 $node_publisher->wait_for_catchup('mysub');
 
@@ -347,6 +346,36 @@ $node_publisher->wait_for_catchup('mysub');
 
 $result = $node_subscriber->safe_psql('postgres', "SELECT count(*) FROM pg_catalog.pg_cast c, pg_catalog.pg_proc p WHERE p.proname='add' AND c.castfunc=p.oid;");
 is($result, qq(1), 'CreateCast Stmt is replicated');
+
+#TEST RenameStmt for FUNCTION
+$node_publisher->safe_psql('postgres', "ALTER FUNCTION add RENAME TO plus;");
+
+$node_publisher->wait_for_catchup('mysub');
+
+$result = $node_subscriber->safe_psql('postgres', "SELECT count(*) from pg_catalog.pg_proc p where p.proname='plus';");
+is($result, qq(1), 'RENAME FUNCTION Stmt is replicated');
+
+#TEST RenameStmt for table
+$node_publisher->safe_psql('postgres', "CREATE DATABASE db1;");
+$node_publisher->safe_psql('db1', "CREATE TABLE t7 (id int primary key, name varchar);");
+$node_publisher->safe_psql('db1', "CREATE TABLE t8 (id int primary key, name varchar);");
+$node_publisher->safe_psql('db1',
+	"CREATE PUBLICATION mypub3 FOR TABLE t7 with (ddl = 'table');");
+my $publisher_connstr_db1 = $node_publisher->connstr . ' dbname=db1';
+$node_subscriber->safe_psql('postgres', "CREATE DATABASE db1;");
+$node_subscriber->safe_psql('db1', "CREATE TABLE t7 (id int primary key, name varchar);");
+$node_subscriber->safe_psql('db1', "CREATE TABLE t8 (id int primary key, name varchar);");
+$node_subscriber->safe_psql('db1',
+	"CREATE SUBSCRIPTION mysub3 CONNECTION '$publisher_connstr_db1' PUBLICATION mypub3;"
+);
+$node_publisher->wait_for_catchup('mysub3');
+$node_publisher->safe_psql('db1', "ALTER TABLE t7 RENAME TO newt7;");
+$node_publisher->safe_psql('db1', "ALTER TABLE t8 RENAME TO newt8;");
+$node_publisher->wait_for_catchup('mysub3');
+$result = $node_subscriber->safe_psql('db1', "SELECT count(*) from pg_tables where tablename = 'newt7';");
+is($result, qq(1), 'Rename t7 to newt7 is replicated');
+$result = $node_subscriber->safe_psql('db1', "SELECT count(*) from pg_tables where tablename = 'newt8';");
+is($result, qq(0), 'Rename t8 to newt8 is not replicated');
 
 #TEST DDL in function
 $node_publisher->safe_psql('postgres', qq{
