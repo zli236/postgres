@@ -17,9 +17,10 @@
 #include "catalog/dependency.h"
 #include "catalog/objectaddress.h"
 #include "nodes/parsenodes.h"
+#include "parser/parse_node.h"
 #include "utils/relcache.h"
 
-extern ObjectAddress ExecRenameStmt(RenameStmt *stmt);
+extern ObjectAddress ExecRenameStmt(ParseState *pstate, RenameStmt *stmt, bool isCompleteQuery);
 
 extern ObjectAddress ExecAlterObjectDependsStmt(AlterObjectDependsStmt *stmt,
 												ObjectAddress *refAddress);
