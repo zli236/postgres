@@ -143,6 +143,7 @@
 #include "catalog/pg_subscription.h"
 #include "catalog/pg_subscription_rel.h"
 #include "catalog/pg_tablespace.h"
+#include "commands/subscriptioncmds.h"
 #include "commands/tablecmds.h"
 #include "commands/tablespace.h"
 #include "commands/trigger.h"
@@ -2548,6 +2549,7 @@ apply_execute_sql_command(const char *cmdstr, const char *role, const char *sear
 		bool		 snapshot_set = false;
 		char 		 *schemaname = NULL; /* For CREATE TABLE and CREATE TABLE AS stmt only */
 		char		 *relname = NULL; /* For CREATE TABLE and CREATE TABLE AS stmt only */
+		bool		 is_partitioned_table = false;
 
 		commandTag = CreateCommandTag((Node *)command);
 
@@ -2564,6 +2566,8 @@ apply_execute_sql_command(const char *cmdstr, const char *role, const char *sear
 			RangeVar *rv = cstmt->relation;
 			schemaname = rv->schemaname;
 			relname = rv->relname;
+			if (cstmt->inhRelations != NIL || cstmt->partspec != NULL)
+				is_partitioned_table = true;
 		}
 		else if (commandTag == CMDTAG_CREATE_TABLE_AS)
 		{
@@ -2765,12 +2769,31 @@ apply_execute_sql_command(const char *cmdstr, const char *role, const char *sear
 
 			if (relid != InvalidOid)
 			{
-				AddSubscriptionRelState(MySubscription->oid, relid,
-										SUBREL_STATE_INIT,
-										InvalidXLogRecPtr);
-				ereport(DEBUG1,
-						(errmsg_internal("table \"%s\" added to subscription \"%s\"",
-										 relname, MySubscription->name)));
+				bool subscribe_table = true;
+
+				if (is_partitioned_table)
+				{
+					Relation rel = RelationIdGetRelation(relid);
+					char *table_name = RelationGetRelationName(rel);
+					char *schema_name = get_namespace_name(RelationGetNamespace(rel));
+					/*
+					 * Connect to the source DB and check whehter the partitioned table should be subscribed.
+					 * Because it depends on the setting of publish_via_partition_root, which the subscription
+					 * doesn't know.
+					 */
+					subscribe_table = IsPartitionedTablePublishedOnSource(MySubscription, schema_name, table_name);
+					RelationClose(rel);
+				}
+
+				if (subscribe_table)
+				{
+					AddSubscriptionRelState(MySubscription->oid, relid,
+											SUBREL_STATE_INIT,
+											InvalidXLogRecPtr);
+					ereport(DEBUG1,
+							(errmsg_internal("table \"%s\" added to subscription \"%s\"",
+											 relname, MySubscription->name)));
+				}
 			}
 		}
 	}

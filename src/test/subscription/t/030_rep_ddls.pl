@@ -431,6 +431,63 @@ $node_publisher->wait_for_catchup('mysub');
 $result = $node_subscriber->safe_psql('postgres', "SELECT count(*) from test_rep where non_volatile = 0.01;");
 is($result, qq(2), 'Alter table add column default 0.01 is replicated');
 
+# Test partitioned table creation is replicated based on the setting of publish_via_partition_root
+$node_publisher->safe_psql('postgres', qq(
+    CREATE TABLE s1.test_part_a (a int, b int, c int) PARTITION BY LIST (a);
+
+    CREATE TABLE s1.test_part_a_1 PARTITION OF s1.test_part_a FOR VALUES IN (1,2,3,4,5);
+    ALTER TABLE s1.test_part_a_1 ADD PRIMARY KEY (a);
+    ALTER TABLE s1.test_part_a_1 REPLICA IDENTITY USING INDEX test_part_a_1_pkey;
+
+    CREATE TABLE s1.test_part_a_2 PARTITION OF s1.test_part_a FOR VALUES IN (6,7,8,9,10);
+    ALTER TABLE s1.test_part_a_2 ADD PRIMARY KEY (b);
+    ALTER TABLE s1.test_part_a_2 REPLICA IDENTITY USING INDEX test_part_a_2_pkey;
+
+    -- initial data, one row in each partition
+    INSERT INTO s1.test_part_a VALUES (1, 3);
+    INSERT INTO s1.test_part_a VALUES (6, 4);
+));
+$result = $node_publisher->safe_psql('postgres', "SELECT count(*) from s1.test_part_a;");
+is($result, qq(2), 'Partitioned table is created and populated');
+
+$node_publisher->wait_for_catchup('mysub');
+
+$result = $node_subscriber->safe_psql('postgres', "SELECT count(*) from s1.test_part_a;");
+is($result, qq(2), 'Partitioned table and data is replicated');
+
+$result = $node_subscriber->safe_psql('postgres', "SELECT count(*) from pg_subscription_rel where srrelid = 's1.test_part_a'::regclass::oid;");
+is($result, qq(0), 'Root table of the partitioned table is not subscribed since publish_via_partition_root is false by default');
+
+$result = $node_subscriber->safe_psql('postgres', "SELECT count(*) from pg_subscription_rel where srrelid = 's1.test_part_a_1'::regclass::oid OR srrelid = 's1.test_part_a_2'::regclass::oid;");
+is($result, qq(2), 'Only leaf tables of the partitioned table are subscribed since publish_via_partition_root is false by default');
+
+# Test only root partition table is subscribed when publish_via_partition_root is enabled
+$node_publisher->safe_psql('postgres', qq(
+	DROP TABLE s1.test_part_a;
+	ALTER PUBLICATION mypub SET (publish_via_partition_root = true);
+    CREATE TABLE s1.test_part_a (a int, b int, c int) PARTITION BY LIST (a);
+
+    CREATE TABLE s1.test_part_a_1 PARTITION OF s1.test_part_a FOR VALUES IN (1,2,3,4,5);
+    ALTER TABLE s1.test_part_a_1 ADD PRIMARY KEY (a);
+    ALTER TABLE s1.test_part_a_1 REPLICA IDENTITY USING INDEX test_part_a_1_pkey;
+
+    CREATE TABLE s1.test_part_a_2 PARTITION OF s1.test_part_a FOR VALUES IN (6,7,8,9,10);
+    ALTER TABLE s1.test_part_a_2 ADD PRIMARY KEY (b);
+    ALTER TABLE s1.test_part_a_2 REPLICA IDENTITY USING INDEX test_part_a_2_pkey;
+
+    -- initial data, one row in each partition
+    INSERT INTO s1.test_part_a VALUES (1, 3);
+    INSERT INTO s1.test_part_a VALUES (6, 4);
+));
+
+$node_publisher->wait_for_catchup('mysub');
+
+$result = $node_subscriber->safe_psql('postgres', "SELECT count(*) from pg_subscription_rel where srrelid = 's1.test_part_a'::regclass::oid;");
+is($result, qq(1), 'Only root table of the partitioned table is subscribed since publish_via_partition_root is enabled');
+
+$result = $node_subscriber->safe_psql('postgres', "SELECT count(*) from pg_subscription_rel where srrelid = 's1.test_part_a_1'::regclass::oid OR srrelid = 's1.test_part_a_2'::regclass::oid;");
+is($result, qq(0), 'Leaf tables of the partitioned table are not subscribed since publish_via_partition_root is enabled');
+
 #TODO TEST certain DDLs are not replicated
 # Test DDL statement that rewrites table with volatile functions are not replicated
 $node_publisher->safe_psql('postgres', "ALTER TABLE test_rep ADD COLUMN volatile double precision DEFAULT 3 * random();");
