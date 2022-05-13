@@ -23,7 +23,6 @@
 #include "catalog/namespace.h"
 #include "catalog/objectaccess.h"
 #include "catalog/objectaddress.h"
-#include "catalog/pg_subscription.h"
 #include "catalog/pg_subscription_rel.h"
 #include "catalog/pg_type.h"
 #include "commands/defrem.h"
@@ -744,6 +743,59 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 	InvokeObjectPostCreateHook(SubscriptionRelationId, subid, 0);
 
 	return myself;
+}
+
+/*
+ * Check if a partitioned table is being published by any publication subscirbed by the subscription.
+ * Whether a partitioned table is published also depends on the publication option
+ * publish_via_partition_root. But the subscriber doesn't know the setting of publish_via_partition_root,
+ * this is why we need to check the source DB so that we can decide whether to subscribe to the partitioned
+ * table (could be either root or leaf table) during replication of create partitioned table.
+ */
+bool
+IsPartitionedTablePublishedOnSource(Subscription *sub, char *schema_name, char *table_name)
+{
+	char *err;
+	WalRcvExecResult *res;
+	StringInfoData cmd;
+	Oid tableRow[1] = {BOOLOID};
+	bool result;
+
+	WalReceiverConn *wrconn;
+	/* Load the library providing us libpq calls. */
+	load_file("libpqwalreceiver", false);
+
+	/* Try to connect to the publisher. */
+	wrconn = walrcv_connect(sub->conninfo, true, sub->name, &err);
+	if (!wrconn)
+		ereport(ERROR,
+				(errcode(ERRCODE_CONNECTION_FAILURE),
+				 errmsg("could not connect to the publisher: %s", err)));
+
+	PG_TRY();
+	{
+		initStringInfo(&cmd);
+		appendStringInfoString(&cmd, "SELECT TRUE\n"
+							   "  FROM pg_catalog.pg_publication_tables t\n"
+							   " WHERE t.pubname IN (");
+		get_publications_str(sub->publications, &cmd, true);
+		appendStringInfoString(&cmd, ") AND t.schemaname = '");
+		appendStringInfoString(&cmd, schema_name);
+		appendStringInfoString(&cmd, "' AND t.tablename = '");
+		appendStringInfoString(&cmd, table_name);
+		appendStringInfoString(&cmd, "'");
+
+		res = walrcv_exec(wrconn, cmd.data, 1, tableRow);
+		pfree(cmd.data);
+		result = tuplestore_tuple_count(res->tuplestore) > 0;
+	}
+	PG_FINALLY();
+	{
+		walrcv_disconnect(wrconn);
+	}
+	PG_END_TRY();
+
+	return result;
 }
 
 static void

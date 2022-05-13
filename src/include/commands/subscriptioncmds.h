@@ -16,6 +16,7 @@
 #define SUBSCRIPTIONCMDS_H
 
 #include "catalog/objectaddress.h"
+#include "catalog/pg_subscription.h"
 #include "parser/parse_node.h"
 
 extern ObjectAddress CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
@@ -25,5 +26,7 @@ extern void DropSubscription(DropSubscriptionStmt *stmt, bool isTopLevel);
 
 extern ObjectAddress AlterSubscriptionOwner(const char *name, Oid newOwnerId);
 extern void AlterSubscriptionOwner_oid(Oid subid, Oid newOwnerId);
+
+extern bool IsPartitionedTablePublishedOnSource(Subscription *sub, char *schema_name, char *table_name);
 
 #endif							/* SUBSCRIPTIONCMDS_H */
