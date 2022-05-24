@@ -32,8 +32,7 @@ logicalddlmsg_desc(StringInfo buf, XLogReaderState *record)
 
 		Assert(prefix[xlrec->prefix_size] != '\0');
 
-		appendStringInfo(buf, "%s, prefix \"%s\"; role \"%s\"; search_path \"%s\"; payload (%zu bytes): ",
-						 xlrec->transactional ? "transactional" : "non-transactional",
+		appendStringInfo(buf, "prefix \"%s\"; role \"%s\"; search_path \"%s\"; payload (%zu bytes): ",
 						 prefix, role, search_path, xlrec->message_size);
 		/* Write message payload as a series of hex bytes */
 		for (int cnt = 0; cnt < xlrec->message_size; cnt++)

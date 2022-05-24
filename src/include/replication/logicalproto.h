@@ -233,11 +233,11 @@ extern void logicalrep_write_message(StringInfo out, TransactionId xid, XLogRecP
 									 bool transactional, const char *prefix,
 									 Size sz, const char *message);
 extern void logicalrep_write_ddlmessage(StringInfo out, TransactionId xid, XLogRecPtr lsn,
-										bool transactional, const char *prefix, const char *role,
+										const char *prefix, const char *role,
 										const char *search_path, Size sz, const char *message);
 extern const char *logicalrep_read_ddlmessage(StringInfo in, XLogRecPtr *lsn, const char **prefix,
 											  const char **role, const char **search_path,
-											  bool *transactional, Size *sz);
+											  Size *sz);
 extern void logicalrep_write_rel(StringInfo out, TransactionId xid,
 								 Relation rel, Bitmapset *columns);
 extern LogicalRepRelation *logicalrep_read_rel(StringInfo in);

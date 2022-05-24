@@ -47,7 +47,7 @@
  */
 XLogRecPtr
 LogLogicalDDLMessage(const char *prefix, Oid roleoid, const char *message,
-					 size_t size, bool transactional)
+					 size_t size)
 {
 	xl_logical_ddl_message xlrec;
 	const char *role;
@@ -55,16 +55,12 @@ LogLogicalDDLMessage(const char *prefix, Oid roleoid, const char *message,
 	role =  GetUserNameFromId(roleoid, false);
 
 	/*
-	 * Force xid to be allocated if we're emitting a transactional message.
+	 * Force xid to be allocated since we're emitting a transactional message.
 	 */
-	if (transactional)
-	{
-		Assert(IsTransactionState());
-		GetCurrentTransactionId();
-	}
+	Assert(IsTransactionState());
+	GetCurrentTransactionId();
 
 	xlrec.dbId = MyDatabaseId;
-	xlrec.transactional = transactional;
 	/* trailing zero is critical; see logicalddlmsg_desc */
 	xlrec.prefix_size = strlen(prefix) + 1;
 	xlrec.role_size = strlen(role) + 1;

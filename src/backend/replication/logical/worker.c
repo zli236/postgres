@@ -2461,14 +2461,13 @@ static void
 apply_handle_ddlmessage(StringInfo s)
 {
 	XLogRecPtr lsn;
-	bool transactional;
 	Size sz;
 	const char *prefix;
 	const char *role;
 	const char *search_path;
 	const char *msg;
 
-	msg = logicalrep_read_ddlmessage(s, &lsn, &prefix, &role, &search_path, &transactional, &sz);
+	msg = logicalrep_read_ddlmessage(s, &lsn, &prefix, &role, &search_path, &sz);
 
 	apply_execute_sql_command(msg, role, search_path, true);
 }
