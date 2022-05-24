@@ -1131,13 +1131,11 @@ LogLogicalDDLCommand(Node *parsetree, const char *queryString)
 			 */
 			if (ddl_need_xlog(InvalidOid, true))
 			{
-				bool transactional = true;
 				const char* prefix = "";
 				LogLogicalDDLMessage(prefix,
 									 GetUserId(),
 									 queryString,
-									 strlen(queryString),
-									 transactional);
+									 strlen(queryString));
 			}
 			break;
 
@@ -1173,13 +1171,11 @@ LogLogicalDDLCommand(Node *parsetree, const char *queryString)
 					 */
 					if (ddl_need_xlog(InvalidOid, true))
 					{
-						bool transactional = true;
 						const char* prefix = "";
 						LogLogicalDDLMessage(prefix,
 											 GetUserId(),
 											 queryString,
-											 strlen(queryString),
-											 transactional);
+											 strlen(queryString));
 					}
 				default:
 					break;
@@ -1195,18 +1191,25 @@ LogLogicalDDLCommand(Node *parsetree, const char *queryString)
 		 */
 		case T_AlterTableStmt:
 		case T_IndexStmt:
+			break;
+		/*
+		 * Rename of objects other than table is only allowed in database level
+		 * replication.
+		 * Rename of table is allowed in both table level and database level
+		 * replication.
+		 */
 		case T_RenameStmt:
 		{
 			RenameStmt *stmt = (RenameStmt *) parsetree;
-			if(!stmt->relation && ddl_need_xlog(InvalidOid, true)){
-				bool transactional = true;
+			if(!stmt->relation && ddl_need_xlog(InvalidOid, true))
+			{
 				const char* prefix = "";
 				LogLogicalDDLMessage(prefix,
 									GetUserId(),
 									queryString,
-									strlen(queryString),
-									transactional);
+									strlen(queryString));
 			}
+			break;
 		}
 		case T_AlterOwnerStmt: /* TODO, it is data control case, save for later update */
 			break;
@@ -1236,13 +1239,11 @@ LogLogicalDDLCommand(Node *parsetree, const char *queryString)
 					 */
 					if (ddl_need_xlog(InvalidOid, true))
 					{
-						bool transactional = true;
 						const char* prefix = "";
 						LogLogicalDDLMessage(prefix,
 											 GetUserId(),
 											 queryString,
-											 strlen(queryString),
-											 transactional);
+											 strlen(queryString));
 					}
 					break;
 			}
@@ -1546,13 +1547,11 @@ ProcessUtilitySlow(ParseState *pstate,
 							isCompleteQuery &&
 							ddl_need_xlog(relid, false))
 						{
-							bool transactional = true;
 							const char* prefix = "";
 							LogLogicalDDLMessage(prefix,
 												 GetUserId(),
 												 queryString,
-												 strlen(queryString),
-												 transactional);
+												 strlen(queryString));
 						}
 
 						/* ... and do it */
@@ -1783,13 +1782,11 @@ ProcessUtilitySlow(ParseState *pstate,
 						isCompleteQuery &&
 						ddl_need_xlog(relid, false))
 					{
-						bool transactional = true;
 						const char* prefix = "";
 						LogLogicalDDLMessage(prefix,
 											 GetUserId(),
 											 queryString,
-											 strlen(queryString),
-											 transactional);
+											 strlen(queryString));
 					}
 
 					address =

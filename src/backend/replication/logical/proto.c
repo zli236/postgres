@@ -670,16 +670,12 @@ logicalrep_read_ddlmessage(StringInfo in, XLogRecPtr *lsn,
 						   const char **prefix,
 						   const char **role,
 						   const char **search_path,
-						   bool *transactional,
 						   Size *sz)
 {
-	uint8 flags;
 	const char *msg;
 
 	//TODO double check when do we need to get TransactionId.
 
-	flags = pq_getmsgint(in, 1);
-	*transactional = (flags & MESSAGE_TRANSACTIONAL) > 0;
 	*lsn = pq_getmsgint64(in);
 	*prefix = pq_getmsgstring(in);
 	*role = pq_getmsgstring(in);
@@ -695,22 +691,16 @@ logicalrep_read_ddlmessage(StringInfo in, XLogRecPtr *lsn,
  */
 void
 logicalrep_write_ddlmessage(StringInfo out, TransactionId xid, XLogRecPtr lsn,
-						 bool transactional, const char *prefix, const char *role,
+						 const char *prefix, const char *role,
 						 const char *search_path, Size sz, const char *message)
 {
-	uint8		flags = 0;
 
 	pq_sendbyte(out, LOGICAL_REP_MSG_DDLMESSAGE);
-
-	/* encode and send message flags */
-	if (transactional)
-		flags |= MESSAGE_TRANSACTIONAL;
 
 	/* transaction ID (if not valid, we're not streaming) */
 	if (TransactionIdIsValid(xid))
 		pq_sendint32(out, xid);
 
-	pq_sendint8(out, flags);
 	pq_sendint64(out, lsn);
 	pq_sendstring(out, prefix);
 	pq_sendstring(out, role);

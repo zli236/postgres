@@ -1516,13 +1516,11 @@ RemoveRelations(ParseState *pstate, DropStmt *drop, bool isCompleteQuery)
 	/* Log the Drop command for logical replication */
 	if (ddlxlog)
 	{
-		bool transactional = true;
 		const char* prefix = "";
 		LogLogicalDDLMessage(prefix,
 							 GetUserId(),
 							 pstate->p_sourcetext,
-							 strlen(pstate->p_sourcetext),
-							 transactional);
+							 strlen(pstate->p_sourcetext));
 	}
 
 	performMultipleDeletions(objects, drop->behavior, flags);
@@ -3876,13 +3874,11 @@ RenameRelation(ParseState *pstate, RenameStmt *stmt, bool isCompleteQuery)
 	if (ddlxlog &&
 		ddl_need_xlog(relid, false))
 	{
-		bool transactional = true;
 		const char* prefix = "";
 		LogLogicalDDLMessage(prefix,
 							 GetUserId(),
 							 pstate->p_sourcetext,
-							 strlen(pstate->p_sourcetext),
-							 transactional);
+							 strlen(pstate->p_sourcetext));
 	}
 
 	/* Do the work */

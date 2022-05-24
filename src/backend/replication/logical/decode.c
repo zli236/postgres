@@ -615,7 +615,6 @@ logicalddlmsg_decode(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 	TransactionId xid = XLogRecGetXid(r);
 	uint8		info = XLogRecGetInfo(r) & ~XLR_INFO_MASK;
 	RepOriginId origin_id = XLogRecGetOrigin(r);
-	Snapshot	snapshot;
 	xl_logical_ddl_message *message;
 
 	if (info != XLOG_LOGICAL_DDL_MESSAGE)
@@ -637,17 +636,7 @@ logicalddlmsg_decode(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 		FilterByOrigin(ctx, origin_id))
 		return;
 
-	if (message->transactional &&
-		!SnapBuildProcessChange(builder, xid, buf->origptr))
-		return;
-	else if (!message->transactional &&
-			 (SnapBuildCurrentState(builder) != SNAPBUILD_CONSISTENT ||
-			  SnapBuildXactNeedsSkip(builder, buf->origptr)))
-		return;
-
-	snapshot = SnapBuildGetOrBuildSnapshot(builder, xid);
-	ReorderBufferQueueDDLMessage(ctx->reorder, xid, snapshot, buf->endptr,
-							  message->transactional,
+	ReorderBufferQueueDDLMessage(ctx->reorder, xid, buf->endptr,
 							  message->message,
 							  /* first part of message is prefix */
 							  message->message + message->prefix_size,

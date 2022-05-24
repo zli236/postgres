@@ -78,7 +78,7 @@ static void pg_decode_message(LogicalDecodingContext *ctx,
 							  Size sz, const char *message);
 static void pg_decode_ddlmessage(LogicalDecodingContext *ctx,
 								 ReorderBufferTXN *txn, XLogRecPtr message_lsn,
-								 bool transactional, const char *prefix,
+								 const char *prefix,
 								 const char *role, const char *search_path,
 								 Size sz, const char *message);
 static bool pg_decode_filter_prepare(LogicalDecodingContext *ctx,
@@ -123,7 +123,7 @@ static void pg_decode_stream_message(LogicalDecodingContext *ctx,
 									 Size sz, const char *message);
 static void pg_decode_stream_ddlmessage(LogicalDecodingContext *ctx,
 										ReorderBufferTXN *txn, XLogRecPtr message_lsn,
-										bool transactional, const char *prefix,
+										const char *prefix,
 										const char *role, const char *search_path,
 										Size sz, const char *message);
 static void pg_decode_stream_truncate(LogicalDecodingContext *ctx,
@@ -771,13 +771,13 @@ pg_decode_message(LogicalDecodingContext *ctx,
 
 static void
 pg_decode_ddlmessage(LogicalDecodingContext *ctx,
-				  ReorderBufferTXN *txn, XLogRecPtr lsn, bool transactional,
+				  ReorderBufferTXN *txn, XLogRecPtr lsn,
 				  const char *prefix, const char *role, const char *search_path,
 				  Size sz, const char *message)
 {
 	OutputPluginPrepareWrite(ctx, true);
-	appendStringInfo(ctx->out, "DDL message: transactional: %d prefix: %s role: %s, search_path: %s, sz: %zu content:",
-					 transactional, prefix, role, search_path, sz);
+	appendStringInfo(ctx->out, "DDL message: prefix: %s role: %s, search_path: %s, sz: %zu content:",
+					 prefix, role, search_path, sz);
 	appendBinaryStringInfo(ctx->out, message, sz);
 	OutputPluginWrite(ctx, true);
 }
@@ -989,23 +989,14 @@ pg_decode_stream_message(LogicalDecodingContext *ctx,
  */
 static void
 pg_decode_stream_ddlmessage(LogicalDecodingContext *ctx,
-							ReorderBufferTXN *txn, XLogRecPtr lsn, bool transactional,
+							ReorderBufferTXN *txn, XLogRecPtr lsn,
 							const char *prefix, const char * role, const char * search_path,
 							Size sz, const char *message)
 {
 	OutputPluginPrepareWrite(ctx, true);
 
-	if (transactional)
-	{
-		appendStringInfo(ctx->out, "streaming DDL message: transactional: %d prefix: %s role: %s, search_path: %s, sz: %zu",
-						 transactional, prefix, role, search_path, sz);
-	}
-	else
-	{
-		appendStringInfo(ctx->out, "streaming DDL message: transactional: %d prefix: %s role: %s, search_path: %s, sz: %zu content:",
-						 transactional, prefix, role, search_path, sz);
-		appendBinaryStringInfo(ctx->out, message, sz);
-	}
+	appendStringInfo(ctx->out, "streaming DDL message: prefix: %s role: %s, search_path: %s, sz: %zu",
+					 prefix, role, search_path, sz);
 
 	OutputPluginWrite(ctx, true);
 }

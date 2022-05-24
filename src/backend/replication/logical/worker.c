@@ -2464,14 +2464,13 @@ static void
 apply_handle_ddlmessage(StringInfo s)
 {
 	XLogRecPtr lsn;
-	bool transactional;
 	Size sz;
 	const char *prefix;
 	const char *role;
 	const char *search_path;
 	const char *msg;
 
-	msg = logicalrep_read_ddlmessage(s, &lsn, &prefix, &role, &search_path, &transactional, &sz);
+	msg = logicalrep_read_ddlmessage(s, &lsn, &prefix, &role, &search_path, &sz);
 
 	apply_execute_sql_command(msg, role, search_path, true);
 }
@@ -2483,6 +2482,181 @@ static void
 execute_sql_command_error_cb(void *arg)
 {
 	errcontext("during execution of SQL statement: %s", (char *) arg);
+}
+
+/*
+ * Preprocess certain DDL commands before apply
+ * -Remove data population for table creation
+ * -Enable missing_ok for drop stmt
+ * -Disallow table rewrites using volatile functions
+ */
+static void
+preprocess_ddl(RawStmt *command, char **schemaname, char **relname, bool *is_partitioned_table)
+{
+	switch(nodeTag(command->stmt))
+	{
+		case T_CreateStmt:
+		{
+			/*
+			 * Remember the schemaname and relname if the cmd is going to create a table
+			 * because we will need them for some post-processing after we
+			 * execute the stmt. At that point, command->stmt may have been freeed up.
+			 */
+			CreateStmt *cstmt = (CreateStmt *) command->stmt;
+			RangeVar *rv = cstmt->relation;
+			*schemaname = rv->schemaname;
+			*relname = rv->relname;
+			if (cstmt->inhRelations != NIL || cstmt->partspec != NULL)
+				*is_partitioned_table = true;
+
+			break;
+		}
+		case T_CreateTableAsStmt:
+		{
+			CreateTableAsStmt *castmt = (CreateTableAsStmt *) command->stmt;
+
+			if (castmt->objtype == OBJECT_TABLE)
+			{
+				RangeVar *rv = castmt->into->rel;
+				*schemaname = rv->schemaname;
+				*relname = rv->relname;
+
+				/*
+				 * Force skipping data population to avoid data inconsistency.
+				 * Data should be replicated from the publisher instead.
+				 */
+				castmt->into->skipData = true;
+			}
+			break;
+		}
+		/* SELECT INTO */
+		case T_SelectStmt:
+		{
+			SelectStmt *sstmt = (SelectStmt *) command->stmt;
+
+			if (sstmt->intoClause != NULL)
+			{
+				RangeVar *rv = sstmt->intoClause->rel;
+				*schemaname = rv->schemaname;
+				*relname = rv->relname;
+
+				/*
+				 * Force skipping data population to avoid data inconsistency.
+				 * Data should be replicated from the publisher instead.
+				 */
+				sstmt->intoClause->skipData = true;
+			}
+			break;
+		}
+		/*
+		 * ALTER TABLE ADD COLUMN col DEFAULT volatile_expr is not supported.
+		 * Until we support logical replication of table rewrite, see ATRewriteTables()
+		 * for details on table rewrite.
+		 */
+		case T_AlterTableStmt:
+		{
+			AlterTableStmt *atstmt = (AlterTableStmt *) command->stmt;
+			ListCell *lc;
+
+			foreach(lc, atstmt->cmds)
+			{
+				AlterTableCmd *cmd = lfirst_node(AlterTableCmd, lc);
+
+				if (cmd->subtype == AT_AddColumn)
+				{
+					ColumnDef *colDef;
+					ListCell *c;
+
+					colDef = castNode(ColumnDef, cmd->def);
+					foreach(c, colDef->constraints)
+					{
+						Constraint *con = lfirst_node(Constraint, c);
+
+						if (con->contype == CONSTR_DEFAULT)
+						{
+							Node *expr;
+							ParseState *pstate = make_parsestate(NULL);
+
+							expr = transformExpr(pstate, copyObject(con->raw_expr), EXPR_KIND_COLUMN_DEFAULT);
+							if (contain_volatile_functions(expr))
+							{
+								elog(ERROR,
+									"Do not support replication of DDL statement that rewrites table using volatile functions");
+							}
+						}
+					}
+				}
+			}
+			break;
+		}
+		case T_DropStmt:
+		{
+			DropStmt *dstmt = (DropStmt *) command->stmt;
+			dstmt->missing_ok = true;
+			break;
+		}
+		default:
+			break;
+	}
+}
+
+/*
+* Table created by DDL replication (database level) is automatically
+* added to the subscription here.
+*
+* Call AddSubscriptionRelState for CREATE TABEL and CREATE TABLE AS
+* command to set the relstate to SUBREL_STATE_INIT so DML changes on this
+* new table can be replicated without having to manually run
+* "alter subscription ... refresh publication"
+*/
+static void
+handle_create_table(char* relname, char* schemaname, bool is_partitioned_table)
+{
+	Oid relid;
+	Oid relnamespace = InvalidOid;
+
+	if (schemaname != NULL)
+		relnamespace = get_namespace_oid(schemaname, false);
+	if (relnamespace != InvalidOid)
+		relid = get_relname_relid(relname, relnamespace);
+	else
+	{
+		/*
+		* Try to resolve unqualified relname.
+		* Notice we have set the search_path to the original search_path on the publisher
+		* at the beginning of this function.
+		*/
+		relid = RelnameGetRelid(relname);
+	}
+
+	if (relid != InvalidOid)
+	{
+		bool subscribe_table = true;
+
+		if (is_partitioned_table)
+		{
+			Relation rel = RelationIdGetRelation(relid);
+			char *table_name = RelationGetRelationName(rel);
+			char *schema_name = get_namespace_name(RelationGetNamespace(rel));
+			/*
+			* Connect to the source DB and check whehter the partitioned table should be subscribed.
+			* Because it depends on the setting of publish_via_partition_root, which the subscription
+			* doesn't know.
+			*/
+			subscribe_table = IsPartitionedTablePublishedOnSource(MySubscription, schema_name, table_name);
+			RelationClose(rel);
+		}
+
+		if (subscribe_table)
+		{
+			AddSubscriptionRelState(MySubscription->oid, relid,
+									SUBREL_STATE_INIT,
+									InvalidXLogRecPtr);
+			ereport(DEBUG1,
+					(errmsg_internal("table \"%s\" added to subscription \"%s\"",
+													relname, MySubscription->name)));
+		}
+	}
 }
 
 /*
@@ -2552,99 +2726,7 @@ apply_execute_sql_command(const char *cmdstr, const char *role, const char *sear
 		bool		 is_partitioned_table = false;
 
 		commandTag = CreateCommandTag((Node *)command);
-
-		/* The following DDL commands need special handling */
-
-		/*
-		 * Remember the schemaname and relname if the cmd is going to create a table
-		 * because we will need them for some post-processing after we
-		 * execute the stmt. At that point, command->stmt may have been freeed up.
-		 */
-		if (commandTag == CMDTAG_CREATE_TABLE)
-		{
-			CreateStmt *cstmt = (CreateStmt *) command->stmt;
-			RangeVar *rv = cstmt->relation;
-			schemaname = rv->schemaname;
-			relname = rv->relname;
-			if (cstmt->inhRelations != NIL || cstmt->partspec != NULL)
-				is_partitioned_table = true;
-		}
-		else if (commandTag == CMDTAG_CREATE_TABLE_AS)
-		{
-			CreateTableAsStmt *castmt = (CreateTableAsStmt *) command->stmt;
-
-			if (castmt->objtype == OBJECT_TABLE)
-			{
-				RangeVar *rv = castmt->into->rel;
-				schemaname = rv->schemaname;
-				relname = rv->relname;
-
-				/*
-				 * Force skipping data population to avoid data inconsistency.
-				 * Data should be replicated from the publisher instead.
-				 */
-				castmt->into->skipData = true;
-			}
-		}
-		/* SELECT INTO */
-		else if (commandTag == CMDTAG_SELECT)
-		{
-			SelectStmt *sstmt = (SelectStmt *) command->stmt;
-
-			if (sstmt->intoClause != NULL)
-			{
-				RangeVar *rv = sstmt->intoClause->rel;
-				schemaname = rv->schemaname;
-				relname = rv->relname;
-
-				/*
-				 * Force skipping data population to avoid data inconsistency.
-				 * Data should be replicated from the publisher instead.
-				 */
-				sstmt->intoClause->skipData = true;
-			}
-		}
-		/*
-		 * ALTER TABLE ADD COLUMN col DEFAULT volatile_expr is not supported.
-		 * Until we support logical replication of table rewrite, see ATRewriteTables()
-		 * for details on table rewrite.
-		 */
-		else if (commandTag == CMDTAG_ALTER_TABLE)
-		{
-			AlterTableStmt *atstmt = (AlterTableStmt *) command->stmt;
-			ListCell *lc;
-
-			foreach(lc, atstmt->cmds)
-			{
-				AlterTableCmd *cmd = lfirst_node(AlterTableCmd, lc);
-
-				if (cmd->subtype == AT_AddColumn)
-				{
-					ColumnDef *colDef;
-					ListCell *c;
-
-					colDef = castNode(ColumnDef, cmd->def);
-					foreach(c, colDef->constraints)
-					{
-						Constraint *con = lfirst_node(Constraint, c);
-
-						if (con->contype == CONSTR_DEFAULT)
-						{
-							Node *expr;
-							ParseState *pstate = make_parsestate(NULL);
-
-							expr = transformExpr(pstate, copyObject(con->raw_expr), EXPR_KIND_COLUMN_DEFAULT);
-							if (contain_volatile_functions(expr))
-							{
-								elog(ERROR,
-									"Do not support replication of DDL statement that rewrites table using volatile functions: %s",
-									cmdstr);
-							}
-						}
-					}
-				}
-			}
-		}
+		preprocess_ddl(command, &schemaname, &relname, &is_partitioned_table);
 
 		/*
 		 * Set up a snapshot if parse analysis/planning will need one.
@@ -2739,63 +2821,8 @@ apply_execute_sql_command(const char *cmdstr, const char *role, const char *sear
 
 		CommandCounterIncrement();
 
-		/*
-		 * Table created by DDL replication (database level) is automatically
-		 * added to the subscription here.
-		 *
-		 * Call AddSubscriptionRelState for CREATE TABEL and CREATE TABLE AS
-		 * command to set the relstate to SUBREL_STATE_INIT so DML changes on this
-		 * new table can be replicated without having to manually run
-		 * "alter subscription ... refresh publication"
-		 */
 		if (relname != NULL)
-		{
-			Oid relid;
-			Oid relnamespace = InvalidOid;
-
-			if (schemaname != NULL)
-				relnamespace = get_namespace_oid(schemaname, false);
-			if (relnamespace != InvalidOid)
-				relid = get_relname_relid(relname, relnamespace);
-			else
-			{
-				/*
-				 * Try to resolve unqualified relname.
-				 * Notice we have set the search_path to the original search_path on the publisher
-				 * at the beginning of this function.
-				 */
-				relid = RelnameGetRelid(relname);
-			}
-
-			if (relid != InvalidOid)
-			{
-				bool subscribe_table = true;
-
-				if (is_partitioned_table)
-				{
-					Relation rel = RelationIdGetRelation(relid);
-					char *table_name = RelationGetRelationName(rel);
-					char *schema_name = get_namespace_name(RelationGetNamespace(rel));
-					/*
-					 * Connect to the source DB and check whehter the partitioned table should be subscribed.
-					 * Because it depends on the setting of publish_via_partition_root, which the subscription
-					 * doesn't know.
-					 */
-					subscribe_table = IsPartitionedTablePublishedOnSource(MySubscription, schema_name, table_name);
-					RelationClose(rel);
-				}
-
-				if (subscribe_table)
-				{
-					AddSubscriptionRelState(MySubscription->oid, relid,
-											SUBREL_STATE_INIT,
-											InvalidXLogRecPtr);
-					ereport(DEBUG1,
-							(errmsg_internal("table \"%s\" added to subscription \"%s\"",
-											 relname, MySubscription->name)));
-				}
-			}
-		}
+			handle_create_table(relname, schemaname, is_partitioned_table);
 	}
 
 	/*

@@ -881,61 +881,33 @@ ReorderBufferQueueMessage(ReorderBuffer *rb, TransactionId xid,
 }
 
 /*
- * A transactional DDL message is queued to be processed upon commit and a
- * non-transactional DDL message gets processed immediately.
+ * A transactional DDL message is queued to be processed upon commit
  */
 void
 ReorderBufferQueueDDLMessage(ReorderBuffer *rb, TransactionId xid,
-						  Snapshot snapshot, XLogRecPtr lsn,
-						  bool transactional, const char *prefix,
+						  XLogRecPtr lsn, const char *prefix,
 						  const char *role, const char *search_path,
 						  Size message_size, const char *message)
 {
-	if (transactional)
-	{
-		MemoryContext oldcontext;
-		ReorderBufferChange *change;
+	MemoryContext oldcontext;
+	ReorderBufferChange *change;
 
-		Assert(xid != InvalidTransactionId);
+	Assert(xid != InvalidTransactionId);
 
-		oldcontext = MemoryContextSwitchTo(rb->context);
+	oldcontext = MemoryContextSwitchTo(rb->context);
 
-		change = ReorderBufferGetChange(rb);
-		change->action = REORDER_BUFFER_CHANGE_DDLMESSAGE;
-		change->data.ddlmsg.prefix = pstrdup(prefix);
-		change->data.ddlmsg.role = pstrdup(role);
-		change->data.ddlmsg.search_path = pstrdup(search_path);
-		change->data.ddlmsg.message_size = message_size;
-		change->data.ddlmsg.message = palloc(message_size);
-		memcpy(change->data.ddlmsg.message, message, message_size);
+	change = ReorderBufferGetChange(rb);
+	change->action = REORDER_BUFFER_CHANGE_DDLMESSAGE;
+	change->data.ddlmsg.prefix = pstrdup(prefix);
+	change->data.ddlmsg.role = pstrdup(role);
+	change->data.ddlmsg.search_path = pstrdup(search_path);
+	change->data.ddlmsg.message_size = message_size;
+	change->data.ddlmsg.message = palloc(message_size);
+	memcpy(change->data.ddlmsg.message, message, message_size);
 
-		ReorderBufferQueueChange(rb, xid, lsn, change, false);
+	ReorderBufferQueueChange(rb, xid, lsn, change, false);
 
-		MemoryContextSwitchTo(oldcontext);
-	}
-	else
-	{
-		ReorderBufferTXN *txn = NULL;
-		volatile Snapshot snapshot_now = snapshot;
-
-		if (xid != InvalidTransactionId)
-			txn = ReorderBufferTXNByXid(rb, xid, true, NULL, lsn, true);
-
-		/* setup snapshot to allow catalog access */
-		SetupHistoricSnapshot(snapshot_now, NULL);
-		PG_TRY();
-		{
-			rb->ddlmessage(rb, txn, lsn, false, prefix, role, search_path, message_size, message);
-
-			TeardownHistoricSnapshot(false);
-		}
-		PG_CATCH();
-		{
-			TeardownHistoricSnapshot(true);
-			PG_RE_THROW();
-		}
-		PG_END_TRY();
-	}
+	MemoryContextSwitchTo(oldcontext);
 }
 
 /*
@@ -2037,14 +2009,14 @@ ReorderBufferApplyDDLMessage(ReorderBuffer *rb, ReorderBufferTXN *txn,
 							 ReorderBufferChange *change, bool streaming)
 {
 	if (streaming)
-		rb->stream_ddlmessage(rb, txn, change->lsn, true,
+		rb->stream_ddlmessage(rb, txn, change->lsn,
 							  change->data.ddlmsg.prefix,
 							  change->data.ddlmsg.role,
 							  change->data.ddlmsg.search_path,
 							  change->data.ddlmsg.message_size,
 							  change->data.ddlmsg.message);
 	else
-		rb->ddlmessage(rb, txn, change->lsn, true,
+		rb->ddlmessage(rb, txn, change->lsn,
 					   change->data.ddlmsg.prefix,
 					   change->data.ddlmsg.role,
 					   change->data.ddlmsg.search_path,

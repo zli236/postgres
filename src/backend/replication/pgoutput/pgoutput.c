@@ -56,7 +56,7 @@ static void pgoutput_message(LogicalDecodingContext *ctx,
 							 Size sz, const char *message);
 static void pgoutput_ddlmessage(LogicalDecodingContext *ctx,
 								ReorderBufferTXN *txn, XLogRecPtr message_lsn,
-								bool transactional, const char *prefix, const char *role,
+								const char *prefix, const char *role,
 								const char *search_path, Size sz, const char *message);
 static bool pgoutput_origin_filter(LogicalDecodingContext *ctx,
 								   RepOriginId origin_id);
@@ -1705,13 +1705,14 @@ pgoutput_message(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 
 static void
 pgoutput_ddlmessage(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
-				 XLogRecPtr message_lsn, bool transactional,
+				 XLogRecPtr message_lsn,
 				 const char *prefix, const char * role,
 				 const char *search_path, Size sz, const char *message)
 {
 	PGOutputData *data = (PGOutputData *) ctx->output_plugin_private;
 	TransactionId xid = InvalidTransactionId;
 	ListCell *lc;
+	PGOutputTxnData *txndata;
 
 	/* Reload publications if needed before use. */
 	if (!publications_valid)
@@ -1745,20 +1746,16 @@ pgoutput_ddlmessage(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 	 * Output BEGIN if we haven't yet. Avoid for non-transactional
 	 * messages.
 	 */
-	if (transactional)
-	{
-		PGOutputTxnData *txndata = (PGOutputTxnData *) txn->output_plugin_private;
+	txndata = (PGOutputTxnData *) txn->output_plugin_private;
 
-		/* Send BEGIN if we haven't yet */
-		if (txndata && !txndata->sent_begin_txn)
-			pgoutput_send_begin(ctx, txn);
-	}
+	/* Send BEGIN if we haven't yet */
+	if (txndata && !txndata->sent_begin_txn)
+		pgoutput_send_begin(ctx, txn);
 
 	OutputPluginPrepareWrite(ctx, true);
 	logicalrep_write_ddlmessage(ctx->out,
 							 xid,
 							 message_lsn,
-							 transactional,
 							 prefix,
 							 role,
 							 search_path,
