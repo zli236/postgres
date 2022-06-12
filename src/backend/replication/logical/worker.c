@@ -351,7 +351,7 @@ static void apply_handle_tuple_routing(ApplyExecutionData *edata,
 									   TupleTableSlot *remoteslot,
 									   LogicalRepTupleData *newtup,
 									   CmdType operation);
-static void apply_execute_sql_command(const char *cmdstr,
+static void apply_execute_sql_command(const char *message,
 									  const char* role,
 									  const char* search_path,
 									  bool isTopLevel);
@@ -2482,130 +2482,70 @@ execute_sql_command_error_cb(void *arg)
 }
 
 /*
- * Execute an SQL command. This can be multiple queries.
- * This is modified based on pglogical_execute_sql_command().
+ * Preprocess certain DDL commands before apply
+ * -Remove data population for table creation
+ * -Enable missing_ok for drop stmt
+ * -Disallow table rewrites using volatile functions
  */
 static void
-apply_execute_sql_command(const char *cmdstr, const char *role, const char *search_path,
-						  bool isTopLevel)
+preprocess_ddl(RawStmt *command, char **schemaname, char **relname, bool *is_partitioned_table)
 {
-	const char *save_debug_query_string = debug_query_string;
-	List	   *parsetree_list;
-	ListCell   *parsetree_item;
-	MemoryContext oldcontext;
-	ErrorContextCallback errcallback;
-	int			save_nestlevel;
-
-	/*
-	 * Switch to appropriate context for constructing parsetrees.
-	 */
-	oldcontext = MemoryContextSwitchTo(ApplyMessageContext);
-	begin_replication_step();
-
-	/*
-	 * Set the current role to the user that executed the command on the
-	 * publication server.
-	 * Set the current search_path to the search_path on the publication
-	 * server when the command was executed.
-	 */
-	save_nestlevel = NewGUCNestLevel();
-	SetConfigOption("role", role, PGC_INTERNAL, PGC_S_OVERRIDE);
-	SetConfigOption("search_path", search_path, PGC_INTERNAL, PGC_S_OVERRIDE);
-
-	errcallback.callback = execute_sql_command_error_cb;
-	errcallback.arg = (char *) cmdstr;
-	errcallback.previous = error_context_stack;
-	error_context_stack = &errcallback;
-
-	debug_query_string = cmdstr;
-
-	parsetree_list = pg_parse_query(cmdstr);
-
-	/*
-	 * Do a limited amount of safety checking against CONCURRENTLY commands
-	 * executed in situations where they aren't allowed. The sender side should
-	 * provide protection, but better be safe than sorry.
-	 */
-	isTopLevel = isTopLevel && (list_length(parsetree_list) == 1);
-
-	/*
-	 * Switch back to transaction context to enter the loop.
-	 */
-	MemoryContextSwitchTo(oldcontext);
-
-	foreach(parsetree_item, parsetree_list)
+	switch(nodeTag(command->stmt))
 	{
-		List	   *plantree_list;
-		List	   *querytree_list;
-		RawStmt	   *command = (RawStmt *) lfirst(parsetree_item);
-		CommandTag	commandTag;
-		MemoryContext per_parsetree_context = NULL;
-		Portal		portal;
-		DestReceiver *receiver;
-		bool		 snapshot_set = false;
-		char 		 *schemaname = NULL; /* For CREATE TABLE and CREATE TABLE AS stmt only */
-		char		 *relname = NULL; /* For CREATE TABLE and CREATE TABLE AS stmt only */
-		bool		 is_partitioned_table = false;
-
-		commandTag = CreateCommandTag((Node *)command);
-
-		/* The following DDL commands need special handling */
-
-		/*
-		 * Remember the schemaname and relname if the cmd is going to create a table
-		 * because we will need them for some post-processing after we
-		 * execute the stmt. At that point, command->stmt may have been freeed up.
-		 */
-		if (commandTag == CMDTAG_CREATE_TABLE)
+		case T_CreateStmt:
 		{
+			/*
+			* Remember the schemaname and relname if the cmd is going to create a table
+			* because we will need them for some post-processing after we
+			* execute the stmt. At that point, command->stmt may have been freeed up.
+			*/
 			CreateStmt *cstmt = (CreateStmt *) command->stmt;
 			RangeVar *rv = cstmt->relation;
-			schemaname = rv->schemaname;
-			relname = rv->relname;
+			*schemaname = rv->schemaname;
+			*relname = rv->relname;
 			if (cstmt->inhRelations != NIL || cstmt->partspec != NULL)
-				is_partitioned_table = true;
+				*is_partitioned_table = true;
+
+			break;
 		}
-		else if (commandTag == CMDTAG_CREATE_TABLE_AS)
+		case T_CreateTableAsStmt:
 		{
 			CreateTableAsStmt *castmt = (CreateTableAsStmt *) command->stmt;
 
 			if (castmt->objtype == OBJECT_TABLE)
 			{
 				RangeVar *rv = castmt->into->rel;
-				schemaname = rv->schemaname;
-				relname = rv->relname;
+				*schemaname = rv->schemaname;
+				*relname = rv->relname;
 
 				/*
-				 * Force skipping data population to avoid data inconsistency.
-				 * Data should be replicated from the publisher instead.
-				 */
+				* Force skipping data population to avoid data inconsistency.
+				* Data should be replicated from the publisher instead.
+				*/
 				castmt->into->skipData = true;
 			}
+			break;
 		}
 		/* SELECT INTO */
-		else if (commandTag == CMDTAG_SELECT)
+		case T_SelectStmt:
 		{
 			SelectStmt *sstmt = (SelectStmt *) command->stmt;
 
 			if (sstmt->intoClause != NULL)
 			{
 				RangeVar *rv = sstmt->intoClause->rel;
-				schemaname = rv->schemaname;
-				relname = rv->relname;
+				*schemaname = rv->schemaname;
+				*relname = rv->relname;
 
 				/*
-				 * Force skipping data population to avoid data inconsistency.
-				 * Data should be replicated from the publisher instead.
-				 */
+				* Force skipping data population to avoid data inconsistency.
+				* Data should be replicated from the publisher instead.
+				*/
 				sstmt->intoClause->skipData = true;
 			}
+			break;
 		}
-		/*
-		 * ALTER TABLE ADD COLUMN col DEFAULT volatile_expr is not supported.
-		 * Until we support logical replication of table rewrite, see ATRewriteTables()
-		 * for details on table rewrite.
-		 */
-		else if (commandTag == CMDTAG_ALTER_TABLE)
+		case T_AlterTableStmt:
 		{
 			AlterTableStmt *atstmt = (AlterTableStmt *) command->stmt;
 			ListCell *lc;
@@ -2633,14 +2573,151 @@ apply_execute_sql_command(const char *cmdstr, const char *role, const char *sear
 							if (contain_volatile_functions(expr))
 							{
 								elog(ERROR,
-									"Do not support replication of DDL statement that rewrites table using volatile functions: %s",
-									cmdstr);
+								"Do not support replication of DDL statement that rewrites table using volatile functions");
 							}
 						}
 					}
 				}
 			}
+			break;
 		}
+		case T_DropStmt:
+		{
+			DropStmt *dstmt = (DropStmt *) command->stmt;
+			dstmt->missing_ok = true;
+			break;
+		}
+		default:
+			break;
+	}
+}
+
+/*
+* Table created by DDL replication (database level) is automatically
+* added to the subscription here.
+*
+* Call AddSubscriptionRelState for CREATE TABEL and CREATE TABLE AS
+* command to set the relstate to SUBREL_STATE_INIT so DML changes on this
+* new table can be replicated without having to manually run
+* "alter subscription ... refresh publication"
+*/
+static void
+handle_create_table(char* relname, char* schemaname, bool is_partitioned_table)
+{
+	Oid relid;
+	Oid relnamespace = InvalidOid;
+
+	if (schemaname != NULL)
+		relnamespace = get_namespace_oid(schemaname, false);
+	if (relnamespace != InvalidOid)
+		relid = get_relname_relid(relname, relnamespace);
+	else
+	{
+		/*
+		* Try to resolve unqualified relname.
+		* Notice we have set the search_path to the original search_path on the publisher
+		* at the beginning of this function.
+		*/
+		relid = RelnameGetRelid(relname);
+	}
+
+	if (relid != InvalidOid)
+	{
+		bool subscribe_table = true;
+
+		if (is_partitioned_table)
+		{
+			Relation rel = RelationIdGetRelation(relid);
+			char *table_name = RelationGetRelationName(rel);
+			char *schema_name = get_namespace_name(RelationGetNamespace(rel));
+			/*
+			* Connect to the source DB and check whehter the partitioned table should be subscribed.
+			* Because it depends on the setting of publish_via_partition_root, which the subscription
+			* doesn't know.
+			*/
+			subscribe_table = IsPartitionedTablePublishedOnSource(MySubscription, schema_name, table_name);
+			RelationClose(rel);
+		}
+
+		if (subscribe_table)
+		{
+			AddSubscriptionRelState(MySubscription->oid, relid,
+									SUBREL_STATE_INIT,
+									InvalidXLogRecPtr);
+			ereport(DEBUG1,
+					(errmsg_internal("table \"%s\" added to subscription \"%s\"",
+									relname, MySubscription->name)));
+		}
+	}
+}
+
+/*
+ * Deserialize a ddlmessage into a raw parsetree by calling stringToNode() and
+ * then execute it.
+ *
+ * This is modified based on pglogical_execute_sql_command().
+ */
+static void
+apply_execute_sql_command(const char *message, const char *role, const char *search_path,
+						  bool isTopLevel)
+{
+	const char *save_debug_query_string = debug_query_string;
+	const char *cmdstr = "";
+	MemoryContext oldcontext;
+	ErrorContextCallback errcallback;
+	int			save_nestlevel;
+	RawStmt *command = makeNode(RawStmt);
+
+	/*
+	 * Switch to appropriate context for constructing parsetrees.
+	 */
+	oldcontext = MemoryContextSwitchTo(ApplyMessageContext);
+	begin_replication_step();
+
+	/*
+	 * Set the current role to the user that executed the command on the
+	 * publication server.
+	 * Set the current search_path to the search_path on the publication
+	 * server when the command was executed.
+	 */
+	save_nestlevel = NewGUCNestLevel();
+	SetConfigOption("role", role, PGC_INTERNAL, PGC_S_OVERRIDE);
+	//SetConfigOption("search_path", search_path, PGC_INTERNAL, PGC_S_OVERRIDE);
+
+	errcallback.callback = execute_sql_command_error_cb;
+	errcallback.arg = (char *) message;
+	errcallback.previous = error_context_stack;
+	error_context_stack = &errcallback;
+
+	debug_query_string = message;
+
+	command->stmt = stringToNode(message);
+
+	/*
+	 * Do a limited amount of safety checking against CONCURRENTLY commands
+	 * executed in situations where they aren't allowed. The sender side should
+	 * provide protection, but better be safe than sorry.
+	 */
+	//isTopLevel = isTopLevel && (list_length(parsetree_list) == 1);
+
+	/*
+	 * Switch back to transaction context to enter the loop.
+	 */
+	MemoryContextSwitchTo(oldcontext);
+
+	if (command->stmt)
+	{
+		List	   *plantree_list;
+		List	   *querytree_list;
+		CommandTag	commandTag = CreateCommandTag((Node *)command);
+		Portal		portal;
+		DestReceiver *receiver;
+		bool		 snapshot_set = false;
+		char 		 *schemaname = NULL; /* For CREATE TABLE and CREATE TABLE AS stmt only */
+		char		 *relname = NULL; /* For CREATE TABLE and CREATE TABLE AS stmt only */
+		bool		 is_partitioned_table = false;
+
+		preprocess_ddl(command, &schemaname, &relname, &is_partitioned_table);
 
 		/*
 		 * Set up a snapshot if parse analysis/planning will need one.
@@ -2656,23 +2733,10 @@ apply_execute_sql_command(const char *cmdstr, const char *role, const char *sear
 		 *
 		 * Switch to appropriate context for constructing query and plan trees
 		 * (these can't be in the transaction context, as that will get reset
-		 * when the command is COMMIT/ROLLBACK).  If we have multiple
-		 * parsetrees, we use a separate context for each one, so that we can
-		 * free that memory before moving on to the next one.  But for the
-		 * last (or only) parsetree, just use MessageContext, which will be
-		 * reset shortly after completion anyway.  In event of an error, the
-		 * per_parsetree_context will be deleted when MessageContext is reset.
+		 * when the command is COMMIT/ROLLBACK).
 		 */
-		if (lnext(parsetree_list, parsetree_item) != NULL)
-		{
-			per_parsetree_context =
-				AllocSetContextCreate(MessageContext,
-									  "per-parsetree message context",
-									  ALLOCSET_DEFAULT_SIZES);
-			oldcontext = MemoryContextSwitchTo(per_parsetree_context);
-		}
-		else
-			oldcontext = MemoryContextSwitchTo(ApplyMessageContext);
+
+		oldcontext = MemoryContextSwitchTo(ApplyMessageContext);
 
 		querytree_list = pg_analyze_and_rewrite_fixedparams(
 			command,
@@ -2735,63 +2799,8 @@ apply_execute_sql_command(const char *cmdstr, const char *role, const char *sear
 
 		CommandCounterIncrement();
 
-		/*
-		 * Table created by DDL replication (database level) is automatically
-		 * added to the subscription here.
-		 *
-		 * Call AddSubscriptionRelState for CREATE TABEL and CREATE TABLE AS
-		 * command to set the relstate to SUBREL_STATE_INIT so DML changes on this
-		 * new table can be replicated without having to manually run
-		 * "alter subscription ... refresh publication"
-		 */
-		if (relname != NULL)
-		{
-			Oid relid;
-			Oid relnamespace = InvalidOid;
-
-			if (schemaname != NULL)
-				relnamespace = get_namespace_oid(schemaname, false);
-			if (relnamespace != InvalidOid)
-				relid = get_relname_relid(relname, relnamespace);
-			else
-			{
-				/*
-				 * Try to resolve unqualified relname.
-				 * Notice we have set the search_path to the original search_path on the publisher
-				 * at the beginning of this function.
-				 */
-				relid = RelnameGetRelid(relname);
-			}
-
-			if (relid != InvalidOid)
-			{
-				bool subscribe_table = true;
-
-				if (is_partitioned_table)
-				{
-					Relation rel = RelationIdGetRelation(relid);
-					char *table_name = RelationGetRelationName(rel);
-					char *schema_name = get_namespace_name(RelationGetNamespace(rel));
-					/*
-					 * Connect to the source DB and check whehter the partitioned table should be subscribed.
-					 * Because it depends on the setting of publish_via_partition_root, which the subscription
-					 * doesn't know.
-					 */
-					subscribe_table = IsPartitionedTablePublishedOnSource(MySubscription, schema_name, table_name);
-					RelationClose(rel);
-				}
-
-				if (subscribe_table)
-				{
-					AddSubscriptionRelState(MySubscription->oid, relid,
-											SUBREL_STATE_INIT,
-											InvalidXLogRecPtr);
-					ereport(DEBUG1,
-							(errmsg_internal("table \"%s\" added to subscription \"%s\"",
-											 relname, MySubscription->name)));
-				}
-			}
-		}
+		if (relname)
+			handle_create_table(relname, schemaname, is_partitioned_table);
 	}
 
 	/*

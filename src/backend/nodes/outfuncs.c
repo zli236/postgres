@@ -29,12 +29,14 @@
 
 #include <ctype.h>
 
+#include "catalog/namespace.h"
 #include "lib/stringinfo.h"
 #include "miscadmin.h"
 #include "nodes/extensible.h"
 #include "nodes/pathnodes.h"
 #include "nodes/plannodes.h"
 #include "utils/datum.h"
+#include "utils/lsyscache.h"
 #include "utils/rel.h"
 
 static void outChar(StringInfo str, char c);
@@ -208,6 +210,34 @@ outChar(StringInfo str, char c)
 	in[1] = '\0';
 
 	outToken(str, in);
+}
+
+/*
+ * Convert a possibly qualified name (list of String nodes)
+ * We'll qualify the name if the input is not qualified.
+ */
+static void
+outQualifiedName(StringInfo str, List *names)
+{
+	appendStringInfoChar(str, '(');
+	if (list_length(names) > 0)
+	{
+		Oid namespaceId;
+		char *schemaname;
+		char *objname;
+
+		namespaceId = QualifiedNameGetCreationNamespace(names, &objname);
+		schemaname = get_namespace_name(namespaceId);
+
+		appendStringInfoChar(str, '"');
+		appendStringInfoString(str, schemaname);
+		appendStringInfoChar(str, '"');
+		appendStringInfoChar(str, ' ');
+		appendStringInfoChar(str, '"');
+		appendStringInfoString(str, objname);
+		appendStringInfoChar(str, '"');
+	}
+	appendStringInfoChar(str, ')');
 }
 
 static void
@@ -1090,7 +1120,16 @@ _outRangeVar(StringInfo str, const RangeVar *node)
 	 * we deliberately ignore catalogname here, since it is presently not
 	 * semantically meaningful
 	 */
-	WRITE_STRING_FIELD(schemaname);
+	if (node->schemaname == NULL)
+	{
+		Oid schema_oid = RangeVarGetCreationNamespace(node);
+		char *schema_name = get_namespace_name(schema_oid);
+
+		appendStringInfoString(str, " :schemaname ");
+		appendStringInfoString(str, schema_name);
+	}
+	else
+		WRITE_STRING_FIELD(schemaname);
 	WRITE_STRING_FIELD(relname);
 	WRITE_BOOL_FIELD(inh);
 	WRITE_CHAR_FIELD(relpersistence);
@@ -2889,6 +2928,18 @@ _outCreateStmt(StringInfo str, const CreateStmt *node)
 }
 
 static void
+_outCreateTableAsStmt(StringInfo str, const CreateTableAsStmt *node)
+{
+	WRITE_NODE_TYPE("CREATETABLEASSTMT");
+
+	WRITE_NODE_FIELD(query);
+	WRITE_NODE_FIELD(into);
+	WRITE_ENUM_FIELD(objtype, ObjectType);
+	WRITE_BOOL_FIELD(is_select_into);
+	WRITE_BOOL_FIELD(if_not_exists);
+}
+
+static void
 _outCreateForeignTableStmt(StringInfo str, const CreateForeignTableStmt *node)
 {
 	WRITE_NODE_TYPE("CREATEFOREIGNTABLESTMT");
@@ -2897,6 +2948,106 @@ _outCreateForeignTableStmt(StringInfo str, const CreateForeignTableStmt *node)
 
 	WRITE_STRING_FIELD(servername);
 	WRITE_NODE_FIELD(options);
+}
+
+static void
+_outAlterTableStmt(StringInfo str, const AlterTableStmt *node)
+{
+	WRITE_NODE_TYPE("ALTERTABLESTMT");
+
+	WRITE_NODE_FIELD(relation);
+	WRITE_NODE_FIELD(cmds);
+	WRITE_ENUM_FIELD(objtype, ObjectType);
+	WRITE_BOOL_FIELD(missing_ok);
+}
+
+static void
+_outAlterTableCmd(StringInfo str, const AlterTableCmd *node)
+{
+	WRITE_NODE_TYPE("ALTERTABLECMD");
+
+	WRITE_ENUM_FIELD(subtype, AlterTableType);
+	WRITE_STRING_FIELD(name);
+	WRITE_INT_FIELD(num);
+	WRITE_NODE_FIELD(newowner);
+	WRITE_NODE_FIELD(def);
+	WRITE_ENUM_FIELD(behavior, DropBehavior);
+	WRITE_BOOL_FIELD(missing_ok);
+}
+
+static void
+_outDropStmt(StringInfo str, const DropStmt *node)
+{
+	WRITE_NODE_TYPE("DROPSTMT");
+
+	//WRITE_NODE_FIELD(objects);
+	appendStringInfoString(str, " :objects ");
+	/* Qualify and OUT object names */
+	if (node->objects)
+	{
+		ListCell *lc;
+
+		appendStringInfoChar(str, '(');
+		foreach(lc, node->objects)
+		{
+			List *names = (List *) lfirst(lc);
+			outQualifiedName(str, names);
+		}
+		appendStringInfoChar(str, ')');
+	}
+	else
+		appendStringInfoString(str, "<>");
+
+	WRITE_ENUM_FIELD(removeType, ObjectType);
+	WRITE_ENUM_FIELD(behavior, DropBehavior);
+	WRITE_BOOL_FIELD(missing_ok);
+	WRITE_BOOL_FIELD(concurrent);
+}
+
+static void
+_outCreateFunctionStmt(StringInfo str, const CreateFunctionStmt *node)
+{
+	WRITE_NODE_TYPE("CREATEFUNCTIONSTMT");
+
+	WRITE_BOOL_FIELD(is_procedure);
+	WRITE_BOOL_FIELD(replace);
+	appendStringInfoString(str, " :funcname ");
+	outQualifiedName(str, node->funcname);
+	WRITE_NODE_FIELD(parameters);
+	WRITE_NODE_FIELD(returnType);
+	WRITE_NODE_FIELD(options);
+	WRITE_NODE_FIELD(sql_body);
+}
+
+static void
+_outFunctionParameter(StringInfo str, const FunctionParameter *node)
+{
+	WRITE_NODE_TYPE("FUNCTIONPARAMETER");
+
+	WRITE_STRING_FIELD(name);
+	WRITE_NODE_FIELD(argType);
+	WRITE_ENUM_FIELD(mode, FunctionParameterMode);
+	WRITE_NODE_FIELD(defexpr);
+}
+
+static void
+_outAlterFunctionStmt(StringInfo str, const AlterFunctionStmt *node)
+{
+	WRITE_NODE_TYPE("ALTERFUNCTIONSTMT");
+
+	WRITE_ENUM_FIELD(objtype, ObjectType);
+	WRITE_NODE_FIELD(func);
+	WRITE_NODE_FIELD(actions);
+}
+
+static void
+_outRoleSpec(StringInfo str, const RoleSpec *node)
+{
+	WRITE_NODE_TYPE("ROLESPEC");
+
+	WRITE_ENUM_FIELD(type, RoleSpecType);
+	WRITE_STRING_FIELD(rolename);
+	WRITE_INT_FIELD(location);
 }
 
 static void
@@ -3134,7 +3285,9 @@ _outTypeName(StringInfo str, const TypeName *node)
 {
 	WRITE_NODE_TYPE("TYPENAME");
 
-	WRITE_NODE_FIELD(names);
+	//WRITE_NODE_FIELD(names);
+	appendStringInfoString(str, " :names ");
+	outQualifiedName(str, node->names);
 	WRITE_OID_FIELD(typeOid);
 	WRITE_BOOL_FIELD(setof);
 	WRITE_BOOL_FIELD(pct_type);
@@ -4543,8 +4696,32 @@ outNode(StringInfo str, const void *obj)
 			case T_CreateStmt:
 				_outCreateStmt(str, obj);
 				break;
+			case T_CreateTableAsStmt:
+				_outCreateTableAsStmt(str, obj);
+				break;
 			case T_CreateForeignTableStmt:
 				_outCreateForeignTableStmt(str, obj);
+				break;
+			case T_AlterTableStmt:
+				_outAlterTableStmt(str, obj);
+				break;
+			case T_AlterTableCmd:
+				_outAlterTableCmd(str, obj);
+				break;
+			case T_DropStmt:
+				_outDropStmt(str, obj);
+				break;
+			case T_CreateFunctionStmt:
+				_outCreateFunctionStmt(str, obj);
+				break;
+			case T_FunctionParameter:
+				_outFunctionParameter(str, obj);
+				break;
+			case T_AlterFunctionStmt:
+				_outAlterFunctionStmt(str, obj);
+				break;
+			case T_RoleSpec:
+				_outRoleSpec(str, obj);
 				break;
 			case T_ImportForeignSchemaStmt:
 				_outImportForeignSchemaStmt(str, obj);

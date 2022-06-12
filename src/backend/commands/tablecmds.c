@@ -1517,10 +1517,11 @@ RemoveRelations(ParseState *pstate, DropStmt *drop, bool isCompleteQuery)
 	if (ddlxlog)
 	{
 		const char* prefix = "";
+		char* parsetree_str = nodeToString((Node *) drop);
 		LogLogicalDDLMessage(prefix,
 							 GetUserId(),
-							 pstate->p_sourcetext,
-							 strlen(pstate->p_sourcetext));
+							 parsetree_str,
+							 strlen(parsetree_str));
 	}
 
 	performMultipleDeletions(objects, drop->behavior, flags);
@@ -3875,10 +3876,11 @@ RenameRelation(ParseState *pstate, RenameStmt *stmt, bool isCompleteQuery)
 		ddl_need_xlog(relid, false))
 	{
 		const char* prefix = "";
+		char* parsetree_str = nodeToString((Node *) stmt);
 		LogLogicalDDLMessage(prefix,
 							 GetUserId(),
-							 pstate->p_sourcetext,
-							 strlen(pstate->p_sourcetext));
+							 parsetree_str,
+							 strlen(parsetree_str));
 	}
 
 	/* Do the work */

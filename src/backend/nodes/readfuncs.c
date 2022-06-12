@@ -2939,6 +2939,426 @@ _readPartitionRangeDatum(void)
 }
 
 /*
+ * _readCreateStmt
+ */
+static CreateStmt*
+_readCreateStmt(void)
+{
+	READ_LOCALS(CreateStmt);
+
+	READ_NODE_FIELD(relation);
+	READ_NODE_FIELD(tableElts);
+	READ_NODE_FIELD(inhRelations);
+	READ_NODE_FIELD(partspec);
+	READ_NODE_FIELD(partbound);
+	READ_NODE_FIELD(ofTypename);
+	READ_NODE_FIELD(constraints);
+	READ_NODE_FIELD(options);
+	READ_ENUM_FIELD(oncommit, OnCommitAction);
+	READ_STRING_FIELD(tablespacename);
+	READ_STRING_FIELD(accessMethod);
+	READ_BOOL_FIELD(if_not_exists);
+
+	READ_DONE();
+}
+
+/*
+ * _readCreateTableAsStmt
+ */
+static CreateTableAsStmt*
+_readCreateTableAsStmt(void)
+{
+	READ_LOCALS(CreateTableAsStmt);
+
+	READ_NODE_FIELD(query);
+	READ_NODE_FIELD(into);
+	READ_ENUM_FIELD(objtype, ObjectType);
+	READ_BOOL_FIELD(is_select_into);
+	READ_BOOL_FIELD(if_not_exists);
+
+	READ_DONE();
+}
+
+/*
+ * _readAlterTableStmt
+ */
+static AlterTableStmt*
+_readAlterTableStmt(void)
+{
+	READ_LOCALS(AlterTableStmt);
+
+	READ_NODE_FIELD(relation);
+	READ_NODE_FIELD(cmds);
+	READ_ENUM_FIELD(objtype, ObjectType);
+	READ_BOOL_FIELD(missing_ok);
+
+	READ_DONE();
+}
+
+/*
+ * _readAlterTableCmd
+ */
+static AlterTableCmd*
+_readAlterTableCmd(void)
+{
+	READ_LOCALS(AlterTableCmd);
+
+	READ_ENUM_FIELD(subtype, AlterTableType);
+	READ_STRING_FIELD(name);
+	READ_INT_FIELD(num);
+	READ_NODE_FIELD(newowner);
+	READ_NODE_FIELD(def);
+	READ_ENUM_FIELD(behavior, DropBehavior);
+	READ_BOOL_FIELD(missing_ok);
+
+	READ_DONE();
+}
+
+/*
+ * _readDropStmt
+ */
+static DropStmt*
+_readDropStmt(void)
+{
+	READ_LOCALS(DropStmt);
+
+	READ_NODE_FIELD(objects);
+	READ_ENUM_FIELD(removeType, ObjectType);
+	READ_ENUM_FIELD(behavior, DropBehavior);
+	READ_BOOL_FIELD(missing_ok);
+	READ_BOOL_FIELD(concurrent);
+
+	READ_DONE();
+}
+
+/*
+ * _readCreateFunctionStmt
+ */
+static CreateFunctionStmt*
+_readCreateFunctionStmt(void)
+{
+	READ_LOCALS(CreateFunctionStmt);
+
+	READ_BOOL_FIELD(is_procedure);
+	READ_BOOL_FIELD(replace);
+	READ_NODE_FIELD(funcname);
+	READ_NODE_FIELD(parameters);
+	READ_NODE_FIELD(returnType);
+	READ_NODE_FIELD(options);
+	READ_NODE_FIELD(sql_body);
+
+	READ_DONE();
+}
+
+/*
+ * _readFunctionParameter
+ */
+static FunctionParameter*
+_readFunctionParameter(void)
+{
+	READ_LOCALS(FunctionParameter);
+
+	READ_STRING_FIELD(name);
+	READ_NODE_FIELD(argType);
+	READ_ENUM_FIELD(mode, FunctionParameterMode);
+	READ_NODE_FIELD(defexpr);
+
+	READ_DONE();
+}
+
+/*
+ * _readAlterFunctionStmt
+ */
+static AlterFunctionStmt*
+_readAlterFunctionStmt(void)
+{
+	READ_LOCALS(AlterFunctionStmt);
+
+	READ_ENUM_FIELD(objtype, ObjectType);
+	READ_NODE_FIELD(func);
+	READ_NODE_FIELD(actions);
+
+	READ_DONE();
+}
+
+/*
+ * _readRoleSpec
+ */
+static RoleSpec*
+_readRoleSpec(void)
+{
+	READ_LOCALS(RoleSpec);
+
+	READ_ENUM_FIELD(type, RoleSpecType);
+	READ_STRING_FIELD(rolename);
+	READ_INT_FIELD(location);
+
+	READ_DONE();
+}
+
+/*
+ * _readColumnDef
+ */
+static ColumnDef*
+_readColumnDef(void)
+{
+	READ_LOCALS(ColumnDef);
+
+	READ_STRING_FIELD(colname);
+	READ_NODE_FIELD(typeName);
+	READ_STRING_FIELD(compression);
+	READ_INT_FIELD(inhcount);
+	READ_BOOL_FIELD(is_local);
+	READ_BOOL_FIELD(is_not_null);
+	READ_BOOL_FIELD(is_from_type);
+	READ_CHAR_FIELD(storage);
+	READ_NODE_FIELD(raw_default);
+	READ_NODE_FIELD(cooked_default);
+	READ_CHAR_FIELD(identity);
+	READ_NODE_FIELD(identitySequence);
+	READ_CHAR_FIELD(generated);
+	READ_NODE_FIELD(collClause);
+	READ_OID_FIELD(collOid);
+	READ_NODE_FIELD(constraints);
+	READ_NODE_FIELD(fdwoptions);
+	READ_LOCATION_FIELD(location);
+
+	READ_DONE();
+}
+
+/*
+ * _readPartitionSpec
+ */
+static PartitionSpec*
+_readPartitionSpec(void)
+{
+	READ_LOCALS(PartitionSpec);
+
+	READ_STRING_FIELD(strategy);
+	READ_NODE_FIELD(partParams);
+	READ_LOCATION_FIELD(location);
+
+	READ_DONE();
+}
+
+/*
+ * _readPartitionElem
+ */
+static PartitionElem*
+_readPartitionElem(void)
+{
+	READ_LOCALS(PartitionElem);
+
+	READ_STRING_FIELD(name);
+	READ_NODE_FIELD(expr);
+	READ_NODE_FIELD(collation);
+	READ_NODE_FIELD(opclass);
+	READ_LOCATION_FIELD(location);
+
+	READ_DONE();
+}
+
+/*
+ * _readTypeName
+ */
+static TypeName*
+_readTypeName(void)
+{
+	READ_LOCALS(TypeName);
+
+	READ_NODE_FIELD(names);
+	READ_OID_FIELD(typeOid);
+	READ_BOOL_FIELD(setof);
+	READ_BOOL_FIELD(pct_type);
+	READ_NODE_FIELD(typmods);
+	READ_INT_FIELD(typemod);
+	READ_NODE_FIELD(arrayBounds);
+	READ_LOCATION_FIELD(location);
+
+	READ_DONE();
+}
+
+/*
+ * _readConstraint
+ */
+static Constraint*
+_readConstraint(void)
+{
+	READ_LOCALS(Constraint);
+	READ_STRING_FIELD(conname);
+	READ_BOOL_FIELD(deferrable);
+	READ_BOOL_FIELD(initdeferred);
+	READ_LOCATION_FIELD(location);
+
+	/* read :contype CONTYPE */
+	token = pg_strtok(&length);
+	token = pg_strtok(&length);
+
+#define MATCH(tokname, namelen) \
+	(length == namelen && memcmp(token, tokname, namelen) == 0)
+
+	if (MATCH("NULL", 4))
+	{
+		local_node->contype = CONSTR_NULL;
+	}
+	else if (MATCH("NOT_NULL", 8))
+	{
+		local_node->contype = CONSTR_NOTNULL;
+	}
+	else if (MATCH("DEFAULT", 7))
+	{
+		local_node->contype = CONSTR_DEFAULT;
+		READ_NODE_FIELD(raw_expr);
+		READ_STRING_FIELD(cooked_expr);
+	}
+	else if (MATCH("IDENTITY", 8))
+	{
+		local_node->contype = CONSTR_IDENTITY;
+		READ_NODE_FIELD(raw_expr);
+		READ_STRING_FIELD(cooked_expr);
+		READ_CHAR_FIELD(generated_when);
+	}
+	else if (MATCH("GENERATED", 9))
+	{
+		local_node->contype = CONSTR_GENERATED;
+		READ_NODE_FIELD(raw_expr);
+		READ_STRING_FIELD(cooked_expr);
+		READ_CHAR_FIELD(generated_when);
+	}
+	else if (MATCH("CHECK", 5))
+	{
+		local_node->contype = CONSTR_CHECK;
+		READ_BOOL_FIELD(is_no_inherit);
+		READ_NODE_FIELD(raw_expr);
+		READ_STRING_FIELD(cooked_expr);
+	}
+	else if (MATCH("PRIMARY_KEY", 11))
+	{
+		local_node->contype = CONSTR_PRIMARY;
+		READ_NODE_FIELD(keys);
+		READ_NODE_FIELD(including);
+		READ_NODE_FIELD(options);
+		READ_STRING_FIELD(indexname);
+		READ_STRING_FIELD(indexspace);
+		READ_BOOL_FIELD(reset_default_tblspc);
+		/* access_method and where_clause not currently used */
+	}
+	else if (MATCH("UNIQUE", 6))
+	{
+		local_node->contype = CONSTR_UNIQUE;
+		READ_BOOL_FIELD(nulls_not_distinct);
+		READ_NODE_FIELD(keys);
+		READ_NODE_FIELD(including);
+		READ_NODE_FIELD(options);
+		READ_STRING_FIELD(indexname);
+		READ_STRING_FIELD(indexspace);
+		READ_BOOL_FIELD(reset_default_tblspc);
+		/* access_method and where_clause not currently used */
+	}
+	else if (MATCH("EXCLUSION", 9))
+	{
+		local_node->contype = CONSTR_EXCLUSION;
+		READ_NODE_FIELD(exclusions);
+		READ_NODE_FIELD(including);
+		READ_NODE_FIELD(options);
+		READ_STRING_FIELD(indexname);
+		READ_STRING_FIELD(indexspace);
+		READ_BOOL_FIELD(reset_default_tblspc);
+		READ_STRING_FIELD(access_method);
+		READ_NODE_FIELD(where_clause);
+	}
+	else if (MATCH("FOREIGN_KEY", 11))
+	{
+		local_node->contype = CONSTR_FOREIGN;
+		READ_NODE_FIELD(pktable);
+		READ_NODE_FIELD(fk_attrs);
+		READ_NODE_FIELD(pk_attrs);
+		READ_CHAR_FIELD(fk_matchtype);
+		READ_CHAR_FIELD(fk_upd_action);
+		READ_CHAR_FIELD(fk_del_action);
+		READ_NODE_FIELD(fk_del_set_cols);
+		READ_NODE_FIELD(old_conpfeqop);
+		READ_OID_FIELD(old_pktable_oid);
+		READ_BOOL_FIELD(skip_validation);
+		READ_BOOL_FIELD(initially_valid);
+	}
+	else if (MATCH("ATTR_DEFERRABLE", 15))
+	{
+		local_node->contype = CONSTR_ATTR_DEFERRABLE;
+	}
+	else if (MATCH("ATTR_NOT_DEFERRABLE", 19))
+	{
+		local_node->contype = CONSTR_ATTR_NOT_DEFERRABLE;
+	}
+	else if (MATCH("ATTR_DEFERRED", 13))
+	{
+		local_node->contype = CONSTR_ATTR_DEFERRED;
+	}
+	else if (MATCH("ATTR_IMMEDIATE", 14))
+	{
+		local_node->contype = CONSTR_ATTR_IMMEDIATE;
+	}
+
+	READ_DONE();
+}
+
+/*
+ * _readIndexStmt
+ */
+static IndexStmt*
+_readIndexStmt(void)
+{
+	READ_LOCALS(IndexStmt);
+
+	READ_STRING_FIELD(idxname);
+	READ_NODE_FIELD(relation);
+	READ_STRING_FIELD(accessMethod);
+	READ_STRING_FIELD(tableSpace);
+	READ_NODE_FIELD(indexParams);
+	READ_NODE_FIELD(indexIncludingParams);
+	READ_NODE_FIELD(options);
+	READ_NODE_FIELD(whereClause);
+	READ_NODE_FIELD(excludeOpNames);
+	READ_STRING_FIELD(idxcomment);
+	READ_OID_FIELD(indexOid);
+	READ_OID_FIELD(oldNode);
+	READ_UINT_FIELD(oldCreateSubid);
+	READ_UINT_FIELD(oldFirstRelfilenodeSubid);
+	READ_BOOL_FIELD(unique);
+	READ_BOOL_FIELD(nulls_not_distinct);
+	READ_BOOL_FIELD(primary);
+	READ_BOOL_FIELD(isconstraint);
+	READ_BOOL_FIELD(deferrable);
+	READ_BOOL_FIELD(initdeferred);
+	READ_BOOL_FIELD(transformed);
+	READ_BOOL_FIELD(concurrent);
+	READ_BOOL_FIELD(if_not_exists);
+	READ_BOOL_FIELD(reset_default_tblspc);
+
+	READ_DONE();
+}
+
+/*
+ * _readIndexElem
+ */
+static IndexElem*
+_readIndexElem(void)
+{
+	READ_LOCALS(IndexElem);
+
+	READ_STRING_FIELD(name);
+	READ_NODE_FIELD(expr);
+	READ_STRING_FIELD(indexcolname);
+	READ_NODE_FIELD(collation);
+	READ_NODE_FIELD(opclass);
+	READ_NODE_FIELD(opclassopts);
+	READ_ENUM_FIELD(ordering, SortByDir);
+	READ_ENUM_FIELD(nulls_ordering, SortByNulls);
+
+	READ_DONE();
+}
+
+/*
  * parseNodeString
  *
  * Given a character string representing a node tree, parseNodeString creates
@@ -3235,6 +3655,38 @@ parseNodeString(void)
 		return_value = _readJsonTableParent();
 	else if (MATCH("JSONTABLESIBLING", 16))
 		return_value = _readJsonTableSibling();
+	else if (MATCH("CREATESTMT", 10))
+		return_value = _readCreateStmt();
+	else if (MATCH("CREATETABLEASSTMT", 17))
+		return_value = _readCreateTableAsStmt();
+	else if (MATCH("ALTERTABLESTMT", 14))
+		return_value = _readAlterTableStmt();
+	else if (MATCH("ALTERTABLECMD", 13))
+		return_value = _readAlterTableCmd();
+	else if (MATCH("DROPSTMT", 8))
+		return_value = _readDropStmt();
+	else if (MATCH("CREATEFUNCTIONSTMT", 18))
+		return_value = _readCreateFunctionStmt();
+	else if (MATCH("FUNCTIONPARAMETER", 17))
+		return_value = _readFunctionParameter();
+	else if (MATCH("ALTERFUNCTIONSTMT", 17))
+		return_value = _readAlterFunctionStmt();
+	else if (MATCH("ROLESPEC", 8))
+		return_value = _readRoleSpec();
+	else if (MATCH("COLUMNDEF", 9))
+		return_value = _readColumnDef();
+	else if (MATCH("TYPENAME", 8))
+		return_value = _readTypeName();
+	else if (MATCH("PARTITIONELEM", 13))
+		return_value = _readPartitionElem();
+	else if (MATCH("PARTITIONSPEC", 13))
+		return_value = _readPartitionSpec();
+	else if (MATCH("CONSTRAINT", 10))
+		return_value = _readConstraint();
+	else if (MATCH("INDEXSTMT", 9))
+		return_value = _readIndexStmt();
+	else if (MATCH("INDEXELEM", 9))
+		return_value = _readIndexElem();
 	else
 	{
 		elog(ERROR, "badly formatted node string \"%.32s\"...", token);

@@ -1132,10 +1132,11 @@ LogLogicalDDLCommand(Node *parsetree, const char *queryString)
 			if (ddl_need_xlog(InvalidOid, true))
 			{
 				const char* prefix = "";
+				char* parsetree_str = nodeToString(parsetree);
 				LogLogicalDDLMessage(prefix,
 									 GetUserId(),
-									 queryString,
-									 strlen(queryString));
+									 parsetree_str,
+									 strlen(parsetree_str));
 			}
 			break;
 
@@ -1172,10 +1173,11 @@ LogLogicalDDLCommand(Node *parsetree, const char *queryString)
 					if (ddl_need_xlog(InvalidOid, true))
 					{
 						const char* prefix = "";
+						char* parsetree_str = nodeToString(parsetree);
 						LogLogicalDDLMessage(prefix,
 											 GetUserId(),
-											 queryString,
-											 strlen(queryString));
+											 parsetree_str,
+											 strlen(parsetree_str));
 					}
 				default:
 					break;
@@ -1191,16 +1193,26 @@ LogLogicalDDLCommand(Node *parsetree, const char *queryString)
 		 */
 		case T_AlterTableStmt:
 		case T_IndexStmt:
+			break;
+		/*
+		 * Rename of objects other than table is only allowed in database level
+		 * replication.
+		 * Rename of table is allowed in both table level and database level
+		 * replication.
+		 */
 		case T_RenameStmt:
 		{
 			RenameStmt *stmt = (RenameStmt *) parsetree;
-			if(!stmt->relation && ddl_need_xlog(InvalidOid, true)){
+			if(!stmt->relation && ddl_need_xlog(InvalidOid, true))
+			{
 				const char* prefix = "";
+				char* parsetree_str = nodeToString(parsetree);
 				LogLogicalDDLMessage(prefix,
-									GetUserId(),
-									queryString,
-									strlen(queryString));
+									 GetUserId(),
+									 parsetree_str,
+									 strlen(parsetree_str));
 			}
+			break;
 		}
 		case T_AlterOwnerStmt: /* TODO, it is data control case, save for later update */
 			break;
@@ -1218,11 +1230,9 @@ LogLogicalDDLCommand(Node *parsetree, const char *queryString)
 				/* Drop of sequence is by logical replication of sequences separately */
 				case OBJECT_SEQUENCE:
 					break;
-				/* Drop of other objects are allowed in Database level DDL replication only */
+				/* Drop of VIEW and MATVIEW are allowed in Database level DDL replication only */
 				case OBJECT_VIEW:
 				case OBJECT_MATVIEW:
-				case OBJECT_FOREIGN_TABLE:
-				default:
 					/*
 					 * Log these DropStmt for logical replication if
 					 * there is any FOR ALL TABLES publication with pubddl_database on.
@@ -1231,11 +1241,14 @@ LogLogicalDDLCommand(Node *parsetree, const char *queryString)
 					if (ddl_need_xlog(InvalidOid, true))
 					{
 						const char* prefix = "";
+						char* parsetree_str = nodeToString(parsetree);
 						LogLogicalDDLMessage(prefix,
 											 GetUserId(),
-											 queryString,
-											 strlen(queryString));
+											 parsetree_str,
+											 strlen(parsetree_str));
 					}
+					break;
+				default:
 					break;
 			}
 		}
@@ -1539,10 +1552,11 @@ ProcessUtilitySlow(ParseState *pstate,
 							ddl_need_xlog(relid, false))
 						{
 							const char* prefix = "";
+							char* parsetree_str = nodeToString(parsetree);
 							LogLogicalDDLMessage(prefix,
 												 GetUserId(),
-												 queryString,
-												 strlen(queryString));
+												 parsetree_str,
+												 strlen(parsetree_str));
 						}
 
 						/* ... and do it */
@@ -1774,10 +1788,11 @@ ProcessUtilitySlow(ParseState *pstate,
 						ddl_need_xlog(relid, false))
 					{
 						const char* prefix = "";
+						char* parsetree_str = nodeToString(parsetree);
 						LogLogicalDDLMessage(prefix,
 											 GetUserId(),
-											 queryString,
-											 strlen(queryString));
+											 parsetree_str,
+											 strlen(parsetree_str));
 					}
 
 					address =
