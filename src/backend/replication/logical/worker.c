@@ -2548,47 +2548,6 @@ preprocess_ddl(RawStmt *command, char **schemaname, char **relname, bool *is_par
 			}
 			break;
 		}
-		/*
-		 * ALTER TABLE ADD COLUMN col DEFAULT volatile_expr is not supported.
-		 * Until we support logical replication of table rewrite, see ATRewriteTables()
-		 * for details on table rewrite.
-		 */
-		case T_AlterTableStmt:
-		{
-			AlterTableStmt *atstmt = (AlterTableStmt *) command->stmt;
-			ListCell *lc;
-
-			foreach(lc, atstmt->cmds)
-			{
-				AlterTableCmd *cmd = lfirst_node(AlterTableCmd, lc);
-
-				if (cmd->subtype == AT_AddColumn)
-				{
-					ColumnDef *colDef;
-					ListCell *c;
-
-					colDef = castNode(ColumnDef, cmd->def);
-					foreach(c, colDef->constraints)
-					{
-						Constraint *con = lfirst_node(Constraint, c);
-
-						if (con->contype == CONSTR_DEFAULT)
-						{
-							Node *expr;
-							ParseState *pstate = make_parsestate(NULL);
-
-							expr = transformExpr(pstate, copyObject(con->raw_expr), EXPR_KIND_COLUMN_DEFAULT);
-							if (contain_volatile_functions(expr))
-							{
-								elog(ERROR,
-									"Do not support replication of DDL statement that rewrites table using volatile functions");
-							}
-						}
-					}
-				}
-			}
-			break;
-		}
 		case T_DropStmt:
 		{
 			DropStmt *dstmt = (DropStmt *) command->stmt;

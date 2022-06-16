@@ -488,13 +488,17 @@ is($result, qq(1), 'Only root table of the partitioned table is subscribed since
 $result = $node_subscriber->safe_psql('postgres', "SELECT count(*) from pg_subscription_rel where srrelid = 's1.test_part_a_1'::regclass::oid OR srrelid = 's1.test_part_a_2'::regclass::oid;");
 is($result, qq(0), 'Leaf tables of the partitioned table are not subscribed since publish_via_partition_root is enabled');
 
-#TODO TEST certain DDLs are not replicated
-# Test DDL statement that rewrites table with volatile functions are not replicated
+# Test DDL statement that rewrites table with volatile functions are replicated with the same values from the publisher
 $node_publisher->safe_psql('postgres', "ALTER TABLE test_rep ADD COLUMN volatile double precision DEFAULT 3 * random();");
-$result = $node_publisher->safe_psql('postgres', "SELECT count(*) FROM information_schema.columns WHERE table_name = 'test_rep' and column_name = 'volatile';");
-is($result, qq(1), 'Alter table add column default random() is executed on the publisher DB.');
+$result = $node_publisher->safe_psql('postgres', "SELECT avg(volatile) FROM test_rep;;");
 
-$result = $node_subscriber->wait_for_log("Do not support replication of DDL statement that rewrites table using volatile functions", $result);
+$node_publisher->wait_for_catchup('mysub');
+
+$result_sub = $node_subscriber->safe_psql('postgres', "SELECT avg(volatile) FROM test_rep;;");
+is($result, qq($result_sub), 'Alter table add column default random() is replicated correctly');
+
+#TODO TEST certain DDLs are not replicated
+#$result = $node_subscriber->wait_for_log("Do not support replication of DDL statement that rewrites table using volatile functions", $result);
 
 pass "DDL replication tests passed!";
 

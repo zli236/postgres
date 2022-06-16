@@ -413,6 +413,7 @@ pgoutput_startup(LogicalDecodingContext *ctx, OutputPluginOptions *opt,
 
 	/* This plugin uses binary protocol. */
 	opt->output_type = OUTPUT_PLUGIN_BINARY_OUTPUT;
+	opt->receive_rewrites = true;
 
 	/*
 	 * This is replication start and not slot initialization.
@@ -1368,8 +1369,21 @@ pgoutput_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 	ReorderBufferChangeType action = change->action;
 	TupleTableSlot *old_slot = NULL;
 	TupleTableSlot *new_slot = NULL;
+	bool table_rewrite = false;
 
 	update_replication_progress(ctx, false);
+
+	/*
+		* For heap rewrites, we might need to replicate them if the rewritten
+		* table publishes rewrite ddl message. So get the actual relation here and
+		* check the pubaction later.
+		*/
+	if (relation->rd_rel->relrewrite)
+	{
+		table_rewrite = true;
+		relation = RelationIdGetRelation(relation->rd_rel->relrewrite);
+		targetrel = relation;
+	}
 
 	if (!is_publishable_relation(relation))
 		return;
@@ -1404,6 +1418,14 @@ pgoutput_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 			Assert(false);
 	}
 
+	/*
+	 * We don't publish table rewrite change unless we publish the rewrite ddl
+	 * message.
+	 */
+	if (table_rewrite &&
+		(!relentry->pubactions.pubddl_database || !relentry->pubactions.pubddl_table))
+		return;
+
 	/* Avoid leaking memory by using and resetting our own context */
 	old = MemoryContextSwitchTo(data->context);
 
@@ -1433,8 +1455,8 @@ pgoutput_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 			}
 
 			/* Check row filter */
-			if (!pgoutput_row_filter(targetrel, NULL, &new_slot, relentry,
-									 &action))
+			if (!table_rewrite &&
+				!pgoutput_row_filter(targetrel, NULL, &new_slot, relentry, &action))
 				break;
 
 			/*
@@ -1454,8 +1476,20 @@ pgoutput_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 			maybe_send_schema(ctx, change, relation, relentry);
 
 			OutputPluginPrepareWrite(ctx, true);
-			logicalrep_write_insert(ctx->out, xid, targetrel, new_slot,
-									data->binary, relentry->columns);
+
+			/*
+			 * Convert the rewrite inserts to updates so that the subscriber
+			 * can replay it. This is needed to make sure the data between
+			 * publisher and subscriber is consistent.
+			 */
+			if (table_rewrite)
+				logicalrep_write_update(ctx->out, xid, targetrel,
+										NULL, new_slot, data->binary,
+										relentry->columns);
+			else
+				logicalrep_write_insert(ctx->out, xid, targetrel, new_slot,
+										data->binary, relentry->columns);
+
 			OutputPluginWrite(ctx, true);
 			break;
 		case REORDER_BUFFER_CHANGE_UPDATE:
@@ -1584,6 +1618,9 @@ pgoutput_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 		RelationClose(ancestor);
 		ancestor = NULL;
 	}
+
+	if (table_rewrite)
+		RelationClose(relation);
 
 	/* Cleanup */
 	MemoryContextSwitchTo(old);
