@@ -2553,7 +2553,11 @@ publication_deparse_ddl_command_end(PG_FUNCTION_ARGS)
 				 strcmp(obj->objecttype, "trigger") == 0 ||
 				 strcmp(obj->objecttype, "conversion") == 0 ||
 				 strcmp(obj->objecttype, "policy") == 0	||
-				 strcmp(obj->objecttype, "extension") == 0)
+				 strcmp(obj->objecttype, "extension") == 0 ||
+				 strcmp(obj->objecttype, "text search configuration") == 0 ||
+				 strcmp(obj->objecttype, "text search dictionary") == 0 ||
+				 strcmp(obj->objecttype, "text search parser") == 0 ||
+				 strcmp(obj->objecttype, "text search template") == 0)
 			cmdtype = DCT_ObjectDrop;
 		else
 			continue;

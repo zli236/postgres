@@ -53,6 +53,10 @@
 #include "catalog/pg_proc.h"
 #include "catalog/pg_range.h"
 #include "catalog/pg_sequence.h"
+#include "catalog/pg_ts_config.h"
+#include "catalog/pg_ts_dict.h"
+#include "catalog/pg_ts_parser.h"
+#include "catalog/pg_ts_template.h"
 #include "catalog/pg_type.h"
 #include "commands/defrem.h"
 #include "commands/sequence.h"
@@ -155,6 +159,10 @@ static ObjTree *deparse_ColumnIdentity(Oid seqrelid, char identity, bool alter_t
 static ObjTree *deparse_ColumnSetOptions(AlterTableCmd *subcmd);
 static ObjTree *deparse_DefineStmt_Operator(Oid objectId, DefineStmt *define);
 static ObjTree *deparse_DefineStmt_Type(Oid objectId, DefineStmt *define);
+static ObjTree *deparse_DefineStmt_TSConfig(Oid objectId, DefineStmt *define, ObjectAddress copied);
+static ObjTree *deparse_DefineStmt_TSParser(Oid objectId, DefineStmt *define);
+static ObjTree *deparse_DefineStmt_TSDictionary(Oid objectId, DefineStmt *define);
+static ObjTree *deparse_DefineStmt_TSTemplate(Oid objectId, DefineStmt *define);
 
 static ObjTree *deparse_DefElem(DefElem *elem, bool is_reset);
 static ObjTree *deparse_FunctionSet(VariableSetKind kind, char *name, char *value);
@@ -5165,6 +5173,22 @@ deparse_DefineStmt(Oid objectId, Node *parsetree, ObjectAddress secondaryObj)
 			defStmt = deparse_DefineStmt_Type(objectId, define);
 			break;
 
+		case OBJECT_TSCONFIGURATION:
+			defStmt = deparse_DefineStmt_TSConfig(objectId, define, secondaryObj);
+			break;
+
+		case OBJECT_TSPARSER:
+			defStmt = deparse_DefineStmt_TSParser(objectId, define);
+			break;
+
+		case OBJECT_TSDICTIONARY:
+			defStmt = deparse_DefineStmt_TSDictionary(objectId, define);
+			break;
+
+		case OBJECT_TSTEMPLATE:
+			defStmt = deparse_DefineStmt_TSTemplate(objectId, define);
+			break;
+
 		default:
 			elog(ERROR, "unsupported object kind");
 	}
@@ -5523,6 +5547,427 @@ deparse_DefineStmt_Type(Oid objectId, DefineStmt *define)
 	ReleaseSysCache(typTup);
 
 	return stmt;
+}
+
+static ObjTree *
+deparse_DefineStmt_TSConfig(Oid objectId, DefineStmt *define,
+							ObjectAddress copied)
+{
+	HeapTuple   tscTup;
+	HeapTuple   tspTup;
+	ObjTree	   *stmt;
+	ObjTree	   *tmp;
+	Form_pg_ts_config tscForm;
+	Form_pg_ts_parser tspForm;
+	List	   *list;
+
+	tscTup = SearchSysCache1(TSCONFIGOID, ObjectIdGetDatum(objectId));
+	if (!HeapTupleIsValid(tscTup))
+		elog(ERROR, "cache lookup failed for text search configuration %u",
+			 objectId);
+	tscForm = (Form_pg_ts_config) GETSTRUCT(tscTup);
+
+	tspTup = SearchSysCache1(TSPARSEROID, ObjectIdGetDatum(tscForm->cfgparser));
+	if (!HeapTupleIsValid(tspTup))
+		elog(ERROR, "cache lookup failed for text search parser %u",
+			 tscForm->cfgparser);
+	tspForm = (Form_pg_ts_parser) GETSTRUCT(tspTup);
+
+	/*
+	 * Verbose syntax
+	 *
+	 * CREATE TEXT SEARCH CONFIGURATION %{identity}D (%{elems:, }s)
+	 */
+	stmt = new_objtree("CREATE");
+
+	append_object_object(stmt, "TEXT SEARCH CONFIGURATION %{identity}D",
+						 new_objtree_for_qualname(tscForm->cfgnamespace,
+												  NameStr(tscForm->cfgname)));
+
+	/*
+	 * Add the definition clause.  If we have COPY'ed an existing config, add
+	 * a COPY clause; otherwise add a PARSER clause.
+	 */
+	list = NIL;
+	/* COPY */
+	tmp = new_objtree_VA("COPY=", 1,
+						 "clause", ObjTypeString, "copy");
+	if (copied.objectId != InvalidOid)
+		append_object_object(tmp, "%{tsconfig}D",
+							 new_objtree_for_qualname_id(TSConfigRelationId,
+														 copied.objectId));
+	else
+		append_bool_object(tmp, "present", false);
+	list = lappend(list, new_object_object(tmp));
+
+	/* PARSER */
+	tmp = new_objtree_VA("PARSER=", 1,
+						 "clause", ObjTypeString, "parser");
+	if (copied.objectId == InvalidOid)
+		append_object_object(tmp, "%{parser}D",
+							 new_objtree_for_qualname(tspForm->prsnamespace,
+													  NameStr(tspForm->prsname)));
+	else
+		append_bool_object(tmp, "present", false);
+	list = lappend(list, new_object_object(tmp));
+
+	append_array_object(stmt, "(%{elems:, }s)", list);
+
+	ReleaseSysCache(tspTup);
+	ReleaseSysCache(tscTup);
+
+	return stmt;
+}
+
+static ObjTree *
+deparse_DefineStmt_TSParser(Oid objectId, DefineStmt *define)
+{
+	HeapTuple   tspTup;
+	ObjTree	   *stmt;
+	ObjTree	   *tmp;
+	List	   *list;
+	Form_pg_ts_parser tspForm;
+
+	tspTup = SearchSysCache1(TSPARSEROID, ObjectIdGetDatum(objectId));
+	if (!HeapTupleIsValid(tspTup))
+		elog(ERROR, "cache lookup failed for text search parser with OID %u",
+			 objectId);
+	tspForm = (Form_pg_ts_parser) GETSTRUCT(tspTup);
+
+	/*
+	 * Verbose syntax
+	 *
+	 * CREATE TEXT SEARCH PARSER %{identity}D (%{elems:, }s)
+	 */
+	stmt = new_objtree("CREATE");
+
+	append_object_object(stmt, "TEXT SEARCH PARSER %{identity}D",
+						 new_objtree_for_qualname(tspForm->prsnamespace,
+												  NameStr(tspForm->prsname)));
+
+	/* Add the definition clause */
+	list = NIL;
+
+	/* START */
+	tmp = new_objtree_VA("START=", 1,
+						 "clause", ObjTypeString, "start");
+	append_object_object(tmp, "%{procedure}D",
+						 new_objtree_for_qualname_id(ProcedureRelationId,
+													 tspForm->prsstart));
+	list = lappend(list, new_object_object(tmp));
+
+	/* GETTOKEN */
+	tmp = new_objtree_VA("GETTOKEN=", 1,
+						 "clause", ObjTypeString, "gettoken");
+	append_object_object(tmp, "%{procedure}D",
+						 new_objtree_for_qualname_id(ProcedureRelationId,
+													 tspForm->prstoken));
+	list = lappend(list, new_object_object(tmp));
+
+	/* END */
+	tmp = new_objtree_VA("END=", 1,
+						 "clause", ObjTypeString, "end");
+	append_object_object(tmp, "%{procedure}D",
+						 new_objtree_for_qualname_id(ProcedureRelationId,
+													 tspForm->prsend));
+	list = lappend(list, new_object_object(tmp));
+
+	/* LEXTYPES */
+	tmp = new_objtree_VA("LEXTYPES=", 1,
+						 "clause", ObjTypeString, "lextypes");
+	append_object_object(tmp, "%{procedure}D",
+						 new_objtree_for_qualname_id(ProcedureRelationId,
+													 tspForm->prslextype));
+	list = lappend(list, new_object_object(tmp));
+
+	/* HEADLINE */
+	tmp = new_objtree_VA("HEADLINE=", 1,
+						 "clause", ObjTypeString, "headline");
+	if (OidIsValid(tspForm->prsheadline))
+		append_object_object(tmp, "%{procedure}D",
+							 new_objtree_for_qualname_id(ProcedureRelationId,
+														 tspForm->prsheadline));
+	else
+		append_bool_object(tmp, "present", false);
+	list = lappend(list, new_object_object(tmp));
+
+	append_array_object(stmt, "(%{elems:, }s)", list);
+
+	ReleaseSysCache(tspTup);
+
+	return stmt;
+}
+
+static ObjTree *
+deparse_DefineStmt_TSDictionary(Oid objectId, DefineStmt *define)
+{
+	HeapTuple   tsdTup;
+	ObjTree	   *stmt;
+	ObjTree	   *tmp;
+	List	   *list;
+	Datum		options;
+	bool		isnull;
+	Form_pg_ts_dict tsdForm;
+
+	tsdTup = SearchSysCache1(TSDICTOID, ObjectIdGetDatum(objectId));
+	if (!HeapTupleIsValid(tsdTup))
+		elog(ERROR, "cache lookup failed for text search dictionary "
+			 "with OID %u", objectId);
+	tsdForm = (Form_pg_ts_dict) GETSTRUCT(tsdTup);
+
+	/*
+	 * Verbose syntax
+	 *
+	 * CREATE TEXT SEARCH DICTIONARY %{identity}D (%{elems:, }s)
+	 */
+	stmt = new_objtree("CREATE");
+
+	append_object_object(stmt, "TEXT SEARCH DICTIONARY %{identity}D",
+						 new_objtree_for_qualname(tsdForm->dictnamespace,
+												  NameStr(tsdForm->dictname)));
+
+	/* Add the definition clause */
+	list = NIL;
+
+	/* TEMPLATE */
+	tmp = new_objtree_VA("TEMPLATE=", 1,
+						 "clause", ObjTypeString, "template");
+	append_object_object(tmp, "%{template}D",
+						 new_objtree_for_qualname_id(TSTemplateRelationId,
+													 tsdForm->dicttemplate));
+	list = lappend(list, new_object_object(tmp));
+
+	/*
+	 * options.  XXX this is a pretty useless representation, but we can't do
+	 * better without more ts_cache.c cooperation ...
+	 */
+	options = SysCacheGetAttr(TSDICTOID, tsdTup,
+							  Anum_pg_ts_dict_dictinitoption,
+							  &isnull);
+	tmp = new_objtree_VA("", 0);
+	if (!isnull)
+		append_string_object(tmp, "%{options}s", TextDatumGetCString(options));
+	else
+		append_bool_object(tmp, "present", false);
+	list = lappend(list, new_object_object(tmp));
+
+	append_array_object(stmt, "(%{elems:, }s)", list);
+
+	ReleaseSysCache(tsdTup);
+
+	return stmt;
+}
+
+static ObjTree *
+deparse_DefineStmt_TSTemplate(Oid objectId, DefineStmt *define)
+{
+	HeapTuple   tstTup;
+	ObjTree	   *stmt;
+	ObjTree	   *tmp;
+	List	   *list;
+	Form_pg_ts_template tstForm;
+
+	tstTup = SearchSysCache1(TSTEMPLATEOID, ObjectIdGetDatum(objectId));
+	if (!HeapTupleIsValid(tstTup))
+		elog(ERROR, "cache lookup failed for text search template with OID %u",
+			 objectId);
+	tstForm = (Form_pg_ts_template) GETSTRUCT(tstTup);
+
+	/*
+	 * Verbose syntax
+	 *
+	 * CREATE TEXT SEARCH TEMPLATE %{identity}D (%{elems:, }s)
+	 */
+	stmt = new_objtree("CREATE");
+
+	append_object_object(stmt, "TEXT SEARCH TEMPLATE %{identity}D",
+						 new_objtree_for_qualname(tstForm->tmplnamespace,
+												  NameStr(tstForm->tmplname)));
+
+	/* Add the definition clause */
+	list = NIL;
+
+	/* INIT */
+	tmp = new_objtree_VA("INIT=", 1,
+						 "clause", ObjTypeString, "init");
+	if (OidIsValid(tstForm->tmplinit))
+		append_object_object(tmp, "%{procedure}D",
+							 new_objtree_for_qualname_id(ProcedureRelationId,
+														 tstForm->tmplinit));
+	else
+		append_bool_object(tmp, "present", false);
+	list = lappend(list, new_object_object(tmp));
+
+	/* LEXIZE */
+	tmp = new_objtree_VA("LEXIZE=", 1,
+						 "clause", ObjTypeString, "lexize");
+	append_object_object(tmp, "%{procedure}D",
+						 new_objtree_for_qualname_id(ProcedureRelationId,
+													 tstForm->tmpllexize));
+	list = lappend(list, new_object_object(tmp));
+
+	append_array_object(stmt, "(%{elems:, }s)", list);
+
+	ReleaseSysCache(tstTup);
+
+	return stmt;
+}
+
+static ObjTree *
+deparse_AlterTSConfigurationStmt(CollectedCommand *cmd)
+{
+	AlterTSConfigurationStmt *node = (AlterTSConfigurationStmt *) cmd->parsetree;
+	ObjTree *config;
+	ObjTree *tmp;
+	List	   *list;
+	ListCell   *cell;
+	int			i;
+
+	/*
+	 * Verbose syntax
+	 * case ALTER_TSCONFIG_ADD_MAPPING:
+	 * ALTER TEXT SEARCH CONFIGURATION %{identity}D ADD MAPPING FOR %{tokentype:, }I WITH %{dictionaries:, }D
+	 *
+	 * case ALTER_TSCONFIG_DROP_MAPPING:
+	 * ALTER TEXT SEARCH CONFIGURATION %{identity}D DROP MAPPING %{if_exists}s FOR %{tokentype}I
+	 *
+	 * case ALTER_TSCONFIG_ALTER_MAPPING_FOR_TOKEN:
+	 * ALTER TEXT SEARCH CONFIGURATION %{identity}D ALTER MAPPING FOR %{tokentype:, }I WITH %{dictionaries:, }D
+	 *
+	 * case ALTER_TSCONFIG_REPLACE_DICT:
+	 * ALTER TEXT SEARCH CONFIGURATION %{identity}D ALTER MAPPING REPLACE %{old_dictionary}D WITH %{new_dictionary}D
+	 *
+	 * case ALTER_TSCONFIG_REPLACE_DICT_FOR_TOKEN:
+	 * ALTER TEXT SEARCH CONFIGURATION %{identity}D ALTER MAPPING FOR %{tokentype:, }I REPLACE %{old_dictionary}D WITH %{new_dictionary}D
+	 */
+
+	config = new_objtree("ALTER TEXT SEARCH CONFIGURATION");
+
+	/* determine the format string appropriate to each subcommand */
+	switch (node->kind)
+	{
+		case ALTER_TSCONFIG_ADD_MAPPING:
+			append_object_object(config, "%{identity}D ADD MAPPING",
+						 new_objtree_for_qualname_id(cmd->d.atscfg.address.classId,
+													 cmd->d.atscfg.address.objectId));
+			break;
+
+		case ALTER_TSCONFIG_DROP_MAPPING:
+			append_object_object(config, "%{identity}D DROP MAPPING",
+								 new_objtree_for_qualname_id(cmd->d.atscfg.address.classId,
+															 cmd->d.atscfg.address.objectId));
+			tmp = new_objtree_VA("IF EXISTS", 0);
+			append_bool_object(tmp, "present", node->missing_ok);
+			append_object_object(config, "%{if_exists}s", tmp);
+			break;
+
+		case ALTER_TSCONFIG_ALTER_MAPPING_FOR_TOKEN:
+			append_object_object(config, "%{identity}D ALTER MAPPING",
+								 new_objtree_for_qualname_id(cmd->d.atscfg.address.classId,
+															 cmd->d.atscfg.address.objectId));
+			break;
+
+		case ALTER_TSCONFIG_REPLACE_DICT:
+			append_object_object(config, "%{identity}D ALTER MAPPING",
+								 new_objtree_for_qualname_id(cmd->d.atscfg.address.classId,
+															 cmd->d.atscfg.address.objectId));
+			break;
+
+		case ALTER_TSCONFIG_REPLACE_DICT_FOR_TOKEN:
+			append_object_object(config, "%{identity}D ALTER MAPPING",
+								 new_objtree_for_qualname_id(cmd->d.atscfg.address.classId,
+															 cmd->d.atscfg.address.objectId));
+			break;
+	}
+
+	/* Add the affected token list, for subcommands that have one */
+	if (node->kind == ALTER_TSCONFIG_ADD_MAPPING ||
+		node->kind == ALTER_TSCONFIG_ALTER_MAPPING_FOR_TOKEN ||
+		node->kind == ALTER_TSCONFIG_REPLACE_DICT_FOR_TOKEN ||
+		node->kind == ALTER_TSCONFIG_DROP_MAPPING)
+	{
+		list = NIL;
+		foreach(cell, node->tokentype)
+			list = lappend(list, new_string_object(strVal(lfirst(cell))));
+		append_array_object(config, "FOR %{tokentype:, }I", list);
+	}
+
+	/* add further subcommand-specific elements */
+	if (node->kind == ALTER_TSCONFIG_ADD_MAPPING ||
+		node->kind == ALTER_TSCONFIG_ALTER_MAPPING_FOR_TOKEN)
+	{
+		/* ADD MAPPING and ALTER MAPPING FOR need a list of dictionaries */
+		list = NIL;
+		for (i = 0; i < cmd->d.atscfg.ndicts; i++)
+		{
+			ObjTree	*dictobj;
+
+			dictobj = new_objtree_for_qualname_id(TSDictionaryRelationId,
+												  cmd->d.atscfg.dictIds[i]);
+			list = lappend(list,
+						   new_object_object(dictobj));
+		}
+		append_array_object(config, "WITH %{dictionaries:, }D", list);
+	}
+	else if (node->kind == ALTER_TSCONFIG_REPLACE_DICT ||
+			 node->kind == ALTER_TSCONFIG_REPLACE_DICT_FOR_TOKEN)
+	{
+		/* the REPLACE forms want old and new dictionaries */
+		Assert(cmd->d.atscfg.ndicts == 2);
+		append_object_object(config, "REPLACE %{old_dictionary}D",
+							 new_objtree_for_qualname_id(TSDictionaryRelationId,
+														 cmd->d.atscfg.dictIds[0]));
+		append_object_object(config, "WITH %{new_dictionary}D",
+							 new_objtree_for_qualname_id(TSDictionaryRelationId,
+														 cmd->d.atscfg.dictIds[1]));
+	}
+
+	return config;
+}
+
+static ObjTree *
+deparse_AlterTSDictionaryStmt(Oid objectId, Node *parsetree)
+{
+	ObjTree *alterTSD;
+	ObjTree *tmp;
+	Datum		options;
+	List	   *definition = NIL;
+	bool		isnull;
+	HeapTuple   tsdTup;
+	Form_pg_ts_dict tsdForm;
+
+	tsdTup = SearchSysCache1(TSDICTOID, ObjectIdGetDatum(objectId));
+	if (!HeapTupleIsValid(tsdTup))
+		elog(ERROR, "cache lookup failed for text search dictionary "
+			 "with OID %u", objectId);
+	tsdForm = (Form_pg_ts_dict) GETSTRUCT(tsdTup);
+
+	/*
+	 * Verbose syntax
+	 * ALTER TEXT SEARCH DICTIONARY %{identity}D (%{definition:, }s)
+	 */
+
+	alterTSD = new_objtree("ALTER TEXT SEARCH DICTIONARY");
+
+	append_object_object(alterTSD, "%{identity}D",
+						 new_objtree_for_qualname(tsdForm->dictnamespace,
+												  NameStr(tsdForm->dictname)));
+
+	/* Add the definition list according to the pg_ts_dict dictinitoption column */
+	options = SysCacheGetAttr(TSDICTOID, tsdTup,
+							  Anum_pg_ts_dict_dictinitoption,
+							  &isnull);
+	tmp = new_objtree_VA("", 0);
+	if (!isnull)
+		append_string_object(tmp, "%{options}s", TextDatumGetCString(options));
+	else
+		append_bool_object(tmp, "present", false);
+
+	definition = lappend(definition, new_object_object(tmp));
+	append_array_object(alterTSD, "(%{definition:, }s)", definition);
+	ReleaseSysCache(tsdTup);
+
+	return alterTSD;
 }
 
 /*
@@ -6355,6 +6800,10 @@ deparse_RenameStmt(ObjectAddress address, Node *parsetree)
 		case OBJECT_TYPE:
 		case OBJECT_CONVERSION:
 		case OBJECT_DOMAIN:
+		case OBJECT_TSDICTIONARY:
+		case OBJECT_TSPARSER:
+		case OBJECT_TSTEMPLATE:
+		case OBJECT_TSCONFIGURATION:
 			{
 				HeapTuple	objTup;
 				Relation	catalog;
@@ -6985,6 +7434,10 @@ deparse_simple_command(CollectedCommand *cmd)
 			command = deparse_CreateCastStmt(objectId, parsetree);
 			break;
 
+		case T_AlterTSDictionaryStmt:
+			command = deparse_AlterTSDictionaryStmt(objectId, parsetree);
+			break;
+
 		default:
 			command = NULL;
 			elog(LOG, "unrecognized node type in deparse command: %d",
@@ -7105,6 +7558,9 @@ deparse_utility_command(CollectedCommand *cmd, bool verbose_mode)
 			break;
 		case SCT_CreateOpClass:
 			tree = deparse_CreateOpClassStmt(cmd);
+			break;
+		case SCT_AlterTSConfig:
+			tree = deparse_AlterTSConfigurationStmt(cmd);
 			break;
 		default:
 			elog(ERROR, "unexpected deparse node type %d", cmd->type);
