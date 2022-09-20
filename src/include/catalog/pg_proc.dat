@@ -11835,4 +11835,7 @@
 { oid => '4646', descr => 'trigger for ddl command deparse table rewrite',
   proname => 'publication_deparse_table_rewrite', prorettype => 'event_trigger',
   proargtypes => '', prosrc => 'publication_deparse_table_rewrite' },
+{ oid => '4647', descr => 'trigger for ddl command deparse table init',
+  proname => 'publication_deparse_table_init_write', prorettype => 'event_trigger',
+  proargtypes => '', prosrc => 'publication_deparse_table_init_write' },
 ]

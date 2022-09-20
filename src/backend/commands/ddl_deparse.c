@@ -6573,6 +6573,27 @@ deparse_Type_Subscript(ObjTree *parent, Form_pg_type typForm)
 }
 
 /*
+ * Deparse CREATE TABLE AS command.
+ *
+ * deparse_CreateStmt do the actual work as we deparse the final CreateStmt for
+ * CREATE TABLE AS command.
+ */
+static ObjTree *
+deparse_CreateTableAsStmt(CollectedCommand *cmd)
+{
+	Oid			objectId;
+	Node	   *parsetree;
+
+	Assert(cmd->type == SCT_CreateTableAs);
+
+	parsetree = cmd->d.ctas.real_create;
+	objectId = cmd->d.ctas.address.objectId;
+
+	return deparse_CreateStmt(objectId, parsetree);
+}
+
+
+/*
  * Handle deparsing of simple commands.
  *
  * This function should cover all cases handled in ProcessUtilitySlow.
@@ -6825,6 +6846,9 @@ deparse_utility_command(CollectedCommand *cmd, bool verbose_mode)
 			break;
 		case SCT_AlterTable:
 			tree = deparse_AlterTableStmt(cmd);
+			break;
+		case SCT_CreateTableAs:
+			tree = deparse_CreateTableAsStmt(cmd);
 			break;
 		case SCT_AlterOpFamily:
 			tree = deparse_AlterOpFamily(cmd);

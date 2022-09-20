@@ -55,6 +55,10 @@ extern void EventTriggerDDLCommandEnd(Node *parsetree);
 extern void EventTriggerSQLDrop(Node *parsetree);
 extern void EventTriggerTableRewrite(Node *parsetree, Oid tableOid, int reason);
 
+extern void EventTriggerTableInitWriteStart(Node *parsetree);
+extern void EventTriggerTableInitWrite(Node *parsetree, ObjectAddress address);
+extern void EventTriggerTableInitWriteEnd(void);
+
 extern bool EventTriggerBeginCompleteQuery(void);
 extern void EventTriggerEndCompleteQuery(void);
 extern bool trackDroppedObjectsNeeded(void);
