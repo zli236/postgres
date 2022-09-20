@@ -2474,7 +2474,8 @@ publication_deparse_ddl_command_end(PG_FUNCTION_ARGS)
 		{
 			RenameStmt *renameStmt = (RenameStmt *)cmd->parsetree;
 
-			if (renameStmt->relationType != OBJECT_TYPE &&
+			if (renameStmt &&
+				renameStmt->relationType != OBJECT_TYPE &&
 				renameStmt->relationType != OBJECT_TABLE)
 				continue;
 		}

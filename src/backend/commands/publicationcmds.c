@@ -999,7 +999,8 @@ CreatePublication(ParseState *pstate, CreatePublicationStmt *stmt)
 			CMDTAG_DROP_SCHEMA,
 			CMDTAG_CREATE_INDEX,
 			CMDTAG_DROP_INDEX,
-			CMDTAG_ALTER_INDEX
+			CMDTAG_ALTER_INDEX,
+			CMDTAG_GRANT
 		};
 
 		CommandTag	init_commands[] = {

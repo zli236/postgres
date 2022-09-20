@@ -32,15 +32,19 @@
 #include "catalog/namespace.h"
 #include "catalog/pg_am.h"
 #include "catalog/pg_attribute.h"
+#include "catalog/pg_authid.h"
 #include "catalog/pg_cast.h"
 #include "catalog/pg_class.h"
 #include "catalog/pg_collation.h"
 #include "catalog/pg_constraint.h"
 #include "catalog/pg_conversion.h"
 #include "catalog/pg_depend.h"
+#include "catalog/pg_foreign_data_wrapper.h"
+#include "catalog/pg_foreign_server.h"
 #include "catalog/pg_extension.h"
 #include "catalog/pg_inherits.h"
 #include "catalog/pg_language.h"
+#include "catalog/pg_largeobject.h"
 #include "catalog/pg_namespace.h"
 #include "catalog/pg_opclass.h"
 #include "catalog/pg_operator.h"
@@ -762,6 +766,39 @@ new_objtree_for_rolespec(RoleSpec *spec)
 	role = new_objtree_VA(NULL,2,
 						  "is_public", ObjTypeBool, spec->roletype == ROLESPEC_PUBLIC,
 						  "rolename", ObjTypeString, roletype);
+	return role;
+}
+
+/*
+ * Helper routine for %{}R objects, with role specified by OID.  (ACL_ID_PUBLIC
+ * means to use "public").
+ */
+static ObjTree *
+new_objtree_for_role_id(Oid roleoid)
+{
+	ObjTree    *role;
+
+	role = new_objtree("");
+
+	if (roleoid != ACL_ID_PUBLIC)
+	{
+		HeapTuple	roltup;
+		char	   *rolename;
+
+		roltup = SearchSysCache1(AUTHOID, ObjectIdGetDatum(roleoid));
+		if (!HeapTupleIsValid(roltup))
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_OBJECT),
+					 errmsg("role with OID %u does not exist", roleoid)));
+
+		rolename = NameStr(((Form_pg_authid) GETSTRUCT(roltup))->rolname);
+		append_string_object(role, "%{rolename}I", pstrdup(rolename));
+
+		ReleaseSysCache(roltup);
+	}
+	else
+		append_string_object(role, "%{rolename}I", "public");
+
 	return role;
 }
 
@@ -1708,6 +1745,216 @@ deparse_AlterObjectSchemaStmt(ObjectAddress address, Node *parsetree,
 	append_string_object(alterStmt, "SET SCHEMA %{newschema}I", newschema);
 
 	return alterStmt;
+}
+
+/*
+ * deparse an GRANT command.
+ */
+static ObjTree *
+deparse_GrantStmt(CollectedCommand *cmd)
+{
+	InternalGrant *istmt;
+	ObjTree	   *grantStmt;
+	char	   *fmt;
+	char	   *objtype;
+	List	   *list;
+	ListCell   *cell;
+	Oid			classId;
+	ObjTree	   *tmp;
+
+	istmt = cmd->d.grant.istmt;
+
+	/*
+	 * If there are no objects from "ALL ... IN SCHEMA" to be granted, then
+	 * we need not do anything.
+	 */
+	if (istmt->objects == NIL)
+		return NULL;
+
+	switch (istmt->objtype)
+	{
+		case OBJECT_COLUMN:
+		case OBJECT_TABLE:
+			objtype = "TABLE";
+			classId = RelationRelationId;
+			break;
+		case OBJECT_SEQUENCE:
+			objtype = "SEQUENCE";
+			classId = RelationRelationId;
+			break;
+		case OBJECT_DOMAIN:
+			objtype = "DOMAIN";
+			classId = TypeRelationId;
+			break;
+		case OBJECT_FDW:
+			objtype = "FOREIGN DATA WRAPPER";
+			classId = ForeignDataWrapperRelationId;
+			break;
+		case OBJECT_FOREIGN_SERVER:
+			objtype = "FOREIGN SERVER";
+			classId = ForeignServerRelationId;
+			break;
+		case OBJECT_FUNCTION:
+			objtype = "FUNCTION";
+			classId = ProcedureRelationId;
+			break;
+		case OBJECT_PROCEDURE:
+			objtype = "PROCEDURE";
+			classId = ProcedureRelationId;
+			break;
+		case OBJECT_ROUTINE:
+			objtype = "ROUTINE";
+			classId = ProcedureRelationId;
+			break;
+		case OBJECT_LANGUAGE:
+			objtype = "LANGUAGE";
+			classId = LanguageRelationId;
+			break;
+		case OBJECT_LARGEOBJECT:
+			objtype = "LARGE OBJECT";
+			classId = LargeObjectRelationId;
+			break;
+		case OBJECT_SCHEMA:
+			objtype = "SCHEMA";
+			classId = NamespaceRelationId;
+			break;
+		case OBJECT_TYPE:
+			objtype = "TYPE";
+			classId = TypeRelationId;
+			break;
+		case OBJECT_DATABASE:
+		case OBJECT_TABLESPACE:
+			objtype = "";
+			classId = InvalidOid;
+			elog(ERROR, "global objects not supported");
+			break;
+		default:
+			elog(ERROR, "invalid OBJECT value %d", istmt->objtype);
+	}
+
+	fmt = psprintf("GRANT");
+
+	grantStmt = new_objtree_VA(fmt, 0);
+
+	/* build list of privileges to grant */
+	if (istmt->all_privs)
+	{
+		tmp = new_objtree_VA("ALL PRIVILEGES", 0);
+		list = list_make1(new_object_object(tmp));
+	}
+	else
+	{
+		list = NIL;
+
+		if (istmt->privileges & ACL_INSERT)
+			list = lappend(list, new_string_object("INSERT"));
+		if (istmt->privileges & ACL_SELECT)
+			list = lappend(list, new_string_object("SELECT"));
+		if (istmt->privileges & ACL_UPDATE)
+			list = lappend(list, new_string_object("UPDATE"));
+		if (istmt->privileges & ACL_DELETE)
+			list = lappend(list, new_string_object("DELETE"));
+		if (istmt->privileges & ACL_TRUNCATE)
+			list = lappend(list, new_string_object("TRUNCATE"));
+		if (istmt->privileges & ACL_REFERENCES)
+			list = lappend(list, new_string_object("REFERENCES"));
+		if (istmt->privileges & ACL_TRIGGER)
+			list = lappend(list, new_string_object("TRIGGER"));
+		if (istmt->privileges & ACL_EXECUTE)
+			list = lappend(list, new_string_object("EXECUTE"));
+		if (istmt->privileges & ACL_USAGE)
+			list = lappend(list, new_string_object("USAGE"));
+		if (istmt->privileges & ACL_CREATE)
+			list = lappend(list, new_string_object("CREATE"));
+		if (istmt->privileges & ACL_CREATE_TEMP)
+			list = lappend(list, new_string_object("TEMPORARY"));
+		if (istmt->privileges & ACL_CONNECT)
+			list = lappend(list, new_string_object("CONNECT"));
+
+		if (istmt->col_privs != NIL)
+		{
+			ListCell   *ocell;
+
+			foreach(ocell, istmt->col_privs)
+			{
+				AccessPriv *priv = lfirst(ocell);
+				List   *cols = NIL;
+
+				tmp = new_objtree("");
+				foreach(cell, priv->cols)
+				{
+					String *colname = lfirst_node(String, cell);
+
+					cols = lappend(cols,
+								   new_string_object(strVal(colname)));
+				}
+				append_array_object(tmp, "(%{cols:, }s)", cols);
+
+				if (priv->priv_name == NULL)
+					append_string_object(grantStmt, "%{priv}s", "ALL PRIVILEGES");
+				else
+					append_string_object(grantStmt, "%{priv}s", priv->priv_name);
+
+				list = lappend(list, new_object_object(tmp));
+			}
+		}
+	}
+	append_array_object(grantStmt, "%{privileges:, }s ON", list);
+
+	append_string_object(grantStmt, "%{objtype}s", objtype);
+
+	/* target objects.  We use object identities here */
+	list = NIL;
+	foreach(cell, istmt->objects)
+	{
+		Oid		objid = lfirst_oid(cell);
+		ObjectAddress addr;
+
+		addr.classId = classId;
+		addr.objectId = objid;
+		addr.objectSubId = 0;
+
+		tmp = new_objtree_VA("%{identity}s", 1,
+							   "identity", ObjTypeString,
+							   getObjectIdentity(&addr, false));
+
+		list = lappend(list, new_object_object(tmp));
+	}
+	append_array_object(grantStmt, "%{privtarget:, }s TO", list);
+
+	/* list of grantees */
+	list = NIL;
+	foreach(cell, istmt->grantees)
+	{
+		Oid		grantee = lfirst_oid(cell);
+
+		tmp = new_objtree_for_role_id(grantee);
+		list = lappend(list, new_object_object(tmp));
+	}
+
+	append_array_object(grantStmt, "%{grantees:, }s", list);
+
+	/* the wording of the grant option is variable ... */
+	append_string_object(grantStmt, "%{grant_option}s",
+						 istmt->grant_option ?  "WITH GRANT OPTION" : "");
+
+	if (istmt->grantor_uid)
+	{
+		HeapTuple	roltup;
+		char	   *rolename;
+
+		roltup = SearchSysCache1(AUTHOID, ObjectIdGetDatum(istmt->grantor_uid));
+		if (!HeapTupleIsValid(roltup))
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_OBJECT),
+					 errmsg("role with OID %u does not exist", istmt->grantor_uid)));
+
+		rolename = NameStr(((Form_pg_authid) GETSTRUCT(roltup))->rolname);
+		append_string_object(grantStmt, "GRANTED BY %{rolename}s", rolename);
+		ReleaseSysCache(roltup);
+	}
+
+	return grantStmt;
 }
 
 /*
@@ -6846,6 +7093,9 @@ deparse_utility_command(CollectedCommand *cmd, bool verbose_mode)
 			break;
 		case SCT_AlterTable:
 			tree = deparse_AlterTableStmt(cmd);
+			break;
+		case SCT_Grant:
+			tree = deparse_GrantStmt(cmd);
 			break;
 		case SCT_CreateTableAs:
 			tree = deparse_CreateTableAsStmt(cmd);
