@@ -71,7 +71,8 @@ extern void EventTriggerCollectSimpleCommand(ObjectAddress address,
 extern void EventTriggerAlterTableStart(Node *parsetree);
 extern void EventTriggerAlterTableRelid(Oid objectId);
 extern void EventTriggerCollectAlterTableSubcmd(Node *subcmd,
-												ObjectAddress address);
+												ObjectAddress address,
+												bool rewrite);
 extern void EventTriggerAlterTableEnd(void);
 
 extern void EventTriggerCollectGrant(InternalGrant *istmt);
