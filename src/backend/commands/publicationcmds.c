@@ -1012,6 +1012,11 @@ CreatePublication(ParseState *pstate, CreatePublicationStmt *stmt)
 			CMDTAG_REFRESH_MATERIALIZED_VIEW
 		};
 
+		CommandTag	init_commands[] = {
+			CMDTAG_CREATE_TABLE_AS,
+			CMDTAG_SELECT_INTO
+		};
+
 		/* Create the ddl_command_end event trigger */
 		CreateDDLReplicaEventTrigger("ddl_command_end", end_commands,
 									 lengthof(end_commands), myself, puboid);
@@ -1023,6 +1028,10 @@ CreatePublication(ParseState *pstate, CreatePublicationStmt *stmt)
 		/* Create the table_rewrite event trigger */
 		CreateDDLReplicaEventTrigger("table_rewrite", rewrite_commands,
 									 lengthof(rewrite_commands), myself, puboid);
+
+		/* Create the table_init_write event trigger */
+		CreateDDLReplicaEventTrigger("table_init_write", init_commands,
+									 lengthof(init_commands), myself, puboid);
 	}
 
 	table_close(rel, RowExclusiveLock);

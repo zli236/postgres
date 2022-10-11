@@ -133,7 +133,8 @@ CreateEventTrigger(CreateEventTrigStmt *stmt)
 	if (strcmp(stmt->eventname, "ddl_command_start") != 0 &&
 		strcmp(stmt->eventname, "ddl_command_end") != 0 &&
 		strcmp(stmt->eventname, "sql_drop") != 0 &&
-		strcmp(stmt->eventname, "table_rewrite") != 0)
+		strcmp(stmt->eventname, "table_rewrite") != 0 &&
+		strcmp(stmt->eventname, "table_init_write") != 0)
 		ereport(ERROR,
 				(errcode(ERRCODE_SYNTAX_ERROR),
 				 errmsg("unrecognized event name \"%s\"",
@@ -159,7 +160,8 @@ CreateEventTrigger(CreateEventTrigStmt *stmt)
 	/* Validate tag list, if any. */
 	if ((strcmp(stmt->eventname, "ddl_command_start") == 0 ||
 		 strcmp(stmt->eventname, "ddl_command_end") == 0 ||
-		 strcmp(stmt->eventname, "sql_drop") == 0)
+		 strcmp(stmt->eventname, "sql_drop") == 0 ||
+		 strcmp(stmt->eventname, "table_init_write") == 0)
 		&& tags != NULL)
 		validate_ddl_tags("tag", tags);
 	else if (strcmp(stmt->eventname, "table_rewrite") == 0
@@ -585,7 +587,8 @@ EventTriggerCommonSetup(Node *parsetree,
 		dbgtag = CreateCommandTag(parsetree);
 		if (event == EVT_DDLCommandStart ||
 			event == EVT_DDLCommandEnd ||
-			event == EVT_SQLDrop)
+			event == EVT_SQLDrop ||
+			event == EVT_TableInitWrite)
 		{
 			if (!command_tag_event_trigger_ok(dbgtag))
 				elog(ERROR, "unexpected command tag \"%s\"", GetCommandTagName(dbgtag));
@@ -857,6 +860,163 @@ EventTriggerTableRewrite(Node *parsetree, Oid tableOid, int reason)
 		currentEventTriggerState->table_rewrite_reason = 0;
 	}
 	PG_END_TRY();
+
+	/* Cleanup. */
+	list_free(runlist);
+
+	/*
+	 * Make sure anything the event triggers did will be visible to the main
+	 * command.
+	 */
+	CommandCounterIncrement();
+}
+
+
+/*
+ * EventTriggerTableInitWriteStart
+ *     Prepare to receive data on an CREATE TABLE AS/SELET INTO command about
+ *     to be executed.
+ */
+void
+EventTriggerTableInitWriteStart(Node *parsetree)
+{
+	MemoryContext oldcxt;
+	CollectedCommand *command;
+
+	/* ignore if event trigger context not set, or collection disabled */
+	if (!currentEventTriggerState ||
+		currentEventTriggerState->commandCollectionInhibited)
+		return;
+
+	oldcxt = MemoryContextSwitchTo(currentEventTriggerState->cxt);
+
+	command = palloc(sizeof(CollectedCommand));
+
+	command->type = SCT_CreateTableAs;
+	command->in_extension = creating_extension;
+	command->d.ctas.address = InvalidObjectAddress;
+	command->d.ctas.real_create = NULL;
+	command->parsetree = copyObject(parsetree);
+
+	command->parent = currentEventTriggerState->currentCommand;
+	currentEventTriggerState->currentCommand = command;
+
+	MemoryContextSwitchTo(oldcxt);
+}
+
+/*
+ * EventTriggerTableInitWriteEnd
+ *		Finish up saving an CREATE TABLE AS/SELECT INTO command.
+ *
+ * FIXME this API isn't considering the possibility that an xact/subxact is
+ * aborted partway through.  Probably it's best to add an
+ * AtEOSubXact_EventTriggers() to fix this.
+ */
+void
+EventTriggerTableInitWriteEnd(void)
+{
+	CollectedCommand *parent;
+
+	/* ignore if event trigger context not set, or collection disabled */
+	if (!currentEventTriggerState ||
+		currentEventTriggerState->commandCollectionInhibited)
+		return;
+
+	parent = currentEventTriggerState->currentCommand->parent;
+
+	pfree(currentEventTriggerState->currentCommand);
+
+	currentEventTriggerState->currentCommand = parent;
+}
+
+/*
+ * publication_deparse_table_init_write
+ *
+ * Deparse the ddl table create command and log it.
+ */
+Datum
+publication_deparse_table_init_write(PG_FUNCTION_ARGS)
+{
+	char				relpersist;
+	CollectedCommand   *cmd;
+	char   			   *json_string;
+
+	if (!CALLED_AS_EVENT_TRIGGER(fcinfo))
+		elog(ERROR, "not fired by event trigger manager");
+
+	cmd = currentEventTriggerState->currentCommand;
+	Assert(cmd);
+
+	relpersist = get_rel_persistence(cmd->d.simple.address.objectId);
+
+	/*
+	 * Do not generate wal log for commands whose target table is a temporary
+	 * table.
+	 *
+	 * We will generate wal logs for unlogged tables so that unlogged tables
+	 * can also be created and altered on the subscriber side. This makes it
+	 * possible to directly replay the SET LOGGED command and the incoming
+	 * rewrite message without creating a new table.
+	 */
+	if (relpersist == RELPERSISTENCE_TEMP)
+		return PointerGetDatum(NULL);
+
+	/* Deparse the DDL command and WAL log it to allow decoding of the same. */
+	json_string = deparse_utility_command(cmd, false);
+
+	if (json_string != NULL)
+		LogLogicalDDLMessage("deparse", cmd->d.simple.address.objectId, DCT_SimpleCmd,
+							 json_string, strlen(json_string) + 1);
+
+	return PointerGetDatum(NULL);
+}
+
+/*
+ * Fire table_init_rewrite triggers.
+ */
+void
+EventTriggerTableInitWrite(Node *real_create, ObjectAddress address)
+{
+	List	   *runlist;
+	EventTriggerData trigdata;
+	CollectedCommand *command;
+
+	/*
+	 * See EventTriggerDDLCommandStart for a discussion about why event
+	 * triggers are disabled in single user mode.
+	 */
+	if (!IsUnderPostmaster)
+		return;
+
+	/*
+	 * Also do nothing if our state isn't set up, which it won't be if there
+	 * weren't any relevant event triggers at the start of the current DDL
+	 * command.  This test might therefore seem optional, but it's
+	 * *necessary*, because EventTriggerCommonSetup might find triggers that
+	 * didn't exist at the time the command started.
+	 */
+	if (!currentEventTriggerState)
+		return;
+
+	/* Do nothing if no command was collected. */
+	if (!currentEventTriggerState->currentCommand)
+		return;
+
+	command = currentEventTriggerState->currentCommand;
+
+	runlist = EventTriggerCommonSetup(command->parsetree,
+									  EVT_TableInitWrite,
+									  "table_init_write",
+									  &trigdata);
+	if (runlist == NIL)
+		return;
+
+	/* Set the real CreateTable statment and object address */
+	command->d.ctas.real_create = real_create;
+	command->d.ctas.address = address;
+
+	/* Run the triggers. */
+	EventTriggerInvoke(runlist, &trigdata);
 
 	/* Cleanup. */
 	list_free(runlist);
@@ -1149,7 +1309,8 @@ trackDroppedObjectsNeeded(void)
 	 */
 	return (EventCacheLookup(EVT_SQLDrop) != NIL) ||
 		(EventCacheLookup(EVT_TableRewrite) != NIL) ||
-		(EventCacheLookup(EVT_DDLCommandEnd) != NIL);
+		(EventCacheLookup(EVT_DDLCommandEnd) != NIL) ||
+		(EventCacheLookup(EVT_TableInitWrite) != NIL);
 }
 
 /*
@@ -1868,6 +2029,7 @@ pg_event_trigger_ddl_commands(PG_FUNCTION_ARGS)
 			case SCT_AlterOpFamily:
 			case SCT_CreateOpClass:
 			case SCT_AlterTSConfig:
+			case SCT_CreateTableAs:
 				{
 					char	   *identity;
 					char	   *type;
@@ -1885,6 +2047,8 @@ pg_event_trigger_ddl_commands(PG_FUNCTION_ARGS)
 						addr = cmd->d.createopc.address;
 					else if (cmd->type == SCT_AlterTSConfig)
 						addr = cmd->d.atscfg.address;
+					else if (cmd->type == SCT_AlterTSConfig)
+						addr = cmd->d.ctas.address;
 
 					/*
 					 * If an object was dropped in the same command we may end

@@ -8624,6 +8624,9 @@ deparse_utility_command(CollectedCommand *cmd, bool verbose_mode)
 		case SCT_Grant:
 			tree = deparse_GrantStmt(cmd);
 			break;
+		case SCT_CreateTableAs:
+			tree = deparse_CreateTableAsStmt(cmd);
+			break;
 		case SCT_AlterOpFamily:
 			tree = deparse_AlterOpFamily(cmd);
 			break;
