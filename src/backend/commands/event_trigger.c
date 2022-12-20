@@ -48,45 +48,7 @@
 #include "utils/rel.h"
 #include "utils/syscache.h"
 
-typedef struct EventTriggerQueryState
-{
-	/* memory context for this state's objects */
-	MemoryContext cxt;
-
-	/* sql_drop */
-	slist_head	SQLDropList;
-	bool		in_sql_drop;
-
-	/* table_rewrite */
-	Oid			table_rewrite_oid;	/* InvalidOid, or set for table_rewrite
-									 * event */
-	int			table_rewrite_reason;	/* AT_REWRITE reason */
-
-	/* Support for command collection */
-	bool		commandCollectionInhibited;
-	CollectedCommand *currentCommand;
-	List	   *commandList;	/* list of CollectedCommand; see
-								 * deparse_utility.h */
-	struct EventTriggerQueryState *previous;
-} EventTriggerQueryState;
-
-static EventTriggerQueryState *currentEventTriggerState = NULL;
-
-/* Support for dropped objects */
-typedef struct SQLDropObject
-{
-	ObjectAddress address;
-	const char *schemaname;
-	const char *objname;
-	const char *objidentity;
-	const char *objecttype;
-	List	   *addrnames;
-	List	   *addrargs;
-	bool		original;
-	bool		normal;
-	bool		istemp;
-	slist_node	next;
-} SQLDropObject;
+EventTriggerQueryState *currentEventTriggerState = NULL;
 
 static void AlterEventTriggerOwner_internal(Relation rel,
 											HeapTuple tup,
