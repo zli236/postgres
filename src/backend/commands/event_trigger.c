@@ -1825,6 +1825,7 @@ pg_event_trigger_ddl_commands(PG_FUNCTION_ARGS)
 			case SCT_AlterOpFamily:
 			case SCT_CreateOpClass:
 			case SCT_AlterTSConfig:
+			case SCT_CreateTableAs:
 				{
 					char	   *identity;
 					char	   *type;
