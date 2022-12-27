@@ -9,6 +9,7 @@
 #ifndef OUTPUT_PLUGIN_H
 #define OUTPUT_PLUGIN_H
 
+#include "replication/ddlmessage.h"
 #include "replication/reorderbuffer.h"
 
 struct LogicalDecodingContext;
@@ -89,6 +90,18 @@ typedef void (*LogicalDecodeMessageCB) (struct LogicalDecodingContext *ctx,
 										const char *prefix,
 										Size message_size,
 										const char *message);
+
+/*
+ * Called for the logical decoding DDL messages.
+ */
+typedef void (*LogicalDecodeDDLMessageCB) (struct LogicalDecodingContext *ctx,
+										   ReorderBufferTXN *txn,
+										   XLogRecPtr message_lsn,
+										   const char *prefix,
+										   Oid relid,
+										   DeparsedCommandType cmdtype,
+										   Size message_size,
+										   const char *message);
 
 /*
  * Filter changes by origin.
@@ -221,6 +234,7 @@ typedef struct OutputPluginCallbacks
 	LogicalDecodeTruncateCB truncate_cb;
 	LogicalDecodeCommitCB commit_cb;
 	LogicalDecodeMessageCB message_cb;
+	LogicalDecodeDDLMessageCB ddl_cb;
 	LogicalDecodeFilterByOriginCB filter_by_origin_cb;
 	LogicalDecodeShutdownCB shutdown_cb;
 
