@@ -1666,8 +1666,11 @@ ProcessUtilitySlow(ParseState *pstate,
 				break;
 
 			case T_CreateTableAsStmt:
+				EventTriggerTableInitWriteStart(parsetree);
 				address = ExecCreateTableAs(pstate, (CreateTableAsStmt *) parsetree,
 											params, queryEnv, qc);
+				EventTriggerTableInitWriteEnd(address);
+				commandCollected = true;
 				break;
 
 			case T_RefreshMatViewStmt:

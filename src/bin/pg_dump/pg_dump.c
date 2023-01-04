@@ -3949,6 +3949,8 @@ getPublications(Archive *fout, int *numPublications)
 	int			i_pubupdate;
 	int			i_pubdelete;
 	int			i_pubtruncate;
+	int			i_pubddl_all;
+	int			i_pubddl_table;
 	int			i_pubviaroot;
 	int			i,
 				ntups;
@@ -3964,23 +3966,23 @@ getPublications(Archive *fout, int *numPublications)
 	resetPQExpBuffer(query);
 
 	/* Get the publications. */
-	if (fout->remoteVersion >= 130000)
+	if (fout->remoteVersion >= 160000)
 		appendPQExpBufferStr(query,
 							 "SELECT p.tableoid, p.oid, p.pubname, "
 							 "p.pubowner, "
-							 "p.puballtables, p.pubinsert, p.pubupdate, p.pubdelete, p.pubtruncate, p.pubviaroot "
+							 "p.puballtables, p.pubinsert, p.pubupdate, p.pubdelete, p.pubtruncate, p.pubddl_all, p.pubddl_table, p.pubviaroot "
 							 "FROM pg_publication p");
 	else if (fout->remoteVersion >= 110000)
 		appendPQExpBufferStr(query,
 							 "SELECT p.tableoid, p.oid, p.pubname, "
 							 "p.pubowner, "
-							 "p.puballtables, p.pubinsert, p.pubupdate, p.pubdelete, p.pubtruncate, false AS pubviaroot "
+							 "p.puballtables, p.pubinsert, p.pubupdate, p.pubdelete, p.pubtruncate, false as p.pubddl_all, false as p.pubddl_table, false AS pubviaroot "
 							 "FROM pg_publication p");
 	else
 		appendPQExpBufferStr(query,
 							 "SELECT p.tableoid, p.oid, p.pubname, "
 							 "p.pubowner, "
-							 "p.puballtables, p.pubinsert, p.pubupdate, p.pubdelete, false AS pubtruncate, false AS pubviaroot "
+							 "p.puballtables, p.pubinsert, p.pubupdate, p.pubdelete, false AS pubtruncate, false as p.pubddl_all, false as p.pubddl_table, false AS pubviaroot "
 							 "FROM pg_publication p");
 
 	res = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
@@ -3996,6 +3998,8 @@ getPublications(Archive *fout, int *numPublications)
 	i_pubupdate = PQfnumber(res, "pubupdate");
 	i_pubdelete = PQfnumber(res, "pubdelete");
 	i_pubtruncate = PQfnumber(res, "pubtruncate");
+	i_pubddl_all = PQfnumber(res, "pubddl_all");
+	i_pubddl_table = PQfnumber(res, "pubddl_table");
 	i_pubviaroot = PQfnumber(res, "pubviaroot");
 
 	pubinfo = pg_malloc(ntups * sizeof(PublicationInfo));
@@ -4019,6 +4023,10 @@ getPublications(Archive *fout, int *numPublications)
 			(strcmp(PQgetvalue(res, i, i_pubdelete), "t") == 0);
 		pubinfo[i].pubtruncate =
 			(strcmp(PQgetvalue(res, i, i_pubtruncate), "t") == 0);
+		pubinfo[i].pubddl_all =
+			(strcmp(PQgetvalue(res, i, i_pubddl_all), "t") == 0);
+		pubinfo[i].pubddl_table =
+			(strcmp(PQgetvalue(res, i, i_pubddl_table), "t") == 0);
 		pubinfo[i].pubviaroot =
 			(strcmp(PQgetvalue(res, i, i_pubviaroot), "t") == 0);
 
@@ -4098,7 +4106,29 @@ dumpPublication(Archive *fout, const PublicationInfo *pubinfo)
 		first = false;
 	}
 
-	appendPQExpBufferChar(query, '\'');
+	appendPQExpBufferStr(query, "'");
+
+	appendPQExpBufferStr(query, ", ddl = '");
+	first = true;
+	if (pubinfo->pubddl_all)
+	{
+		if (!first)
+			appendPQExpBufferStr(query, ", ");
+
+		appendPQExpBufferStr(query, "all");
+		first = false;
+	}
+
+	if (pubinfo->pubddl_table)
+	{
+		if (!first)
+			appendPQExpBufferStr(query, ", ");
+
+		appendPQExpBufferStr(query, "table");
+		first = false;
+	}
+
+	appendPQExpBufferStr(query, "'");
 
 	if (pubinfo->pubviaroot)
 		appendPQExpBufferStr(query, ", publish_via_partition_root = true");

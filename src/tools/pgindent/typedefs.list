@@ -559,6 +559,7 @@ DefElemAction
 DefaultACLInfo
 DefineStmt
 DeleteStmt
+DeparsedCommandType
 DependencyGenerator
 DependencyGeneratorData
 DependencyType
@@ -1439,6 +1440,8 @@ LogicalDecodeBeginPrepareCB
 LogicalDecodeChangeCB
 LogicalDecodeCommitCB
 LogicalDecodeCommitPreparedCB
+LogicalDecodeDDLMessageCB
+LogicalDecodeStreamDDLMessageCB
 LogicalDecodeFilterByOriginCB
 LogicalDecodeFilterPrepareCB
 LogicalDecodeMessageCB
@@ -2287,6 +2290,8 @@ ReorderBufferChange
 ReorderBufferChangeType
 ReorderBufferCommitCB
 ReorderBufferCommitPreparedCB
+ReorderBufferDDLMessageCB
+ReorderBufferStreamDDLMessageCB
 ReorderBufferDiskChange
 ReorderBufferIterTXNEntry
 ReorderBufferIterTXNState

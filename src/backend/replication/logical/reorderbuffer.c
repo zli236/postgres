@@ -2048,12 +2048,20 @@ static inline void
 ReorderBufferApplyDDLMessage(ReorderBuffer *rb, ReorderBufferTXN *txn,
 							 ReorderBufferChange *change, bool streaming)
 {
-	rb->ddl(rb, txn, change->lsn,
-			change->data.ddl.prefix,
-			change->data.ddl.relid,
-			change->data.ddl.cmdtype,
-			change->data.ddl.message_size,
-			change->data.ddl.message);
+	if (streaming)
+		rb->stream_ddl(rb, txn, change->lsn,
+							  change->data.ddl.prefix,
+							  change->data.ddl.relid,
+							  change->data.ddl.cmdtype,
+							  change->data.ddl.message_size,
+							  change->data.ddl.message);
+	else
+		rb->ddl(rb, txn, change->lsn,
+					   change->data.ddl.prefix,
+					   change->data.ddl.relid,
+					   change->data.ddl.cmdtype,
+					   change->data.ddl.message_size,
+					   change->data.ddl.message);
 }
 
 /*

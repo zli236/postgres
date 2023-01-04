@@ -9,7 +9,6 @@
 #ifndef OUTPUT_PLUGIN_H
 #define OUTPUT_PLUGIN_H
 
-#include "replication/ddlmessage.h"
 #include "replication/reorderbuffer.h"
 
 struct LogicalDecodingContext;
@@ -215,6 +214,19 @@ typedef void (*LogicalDecodeStreamMessageCB) (struct LogicalDecodingContext *ctx
 											  const char *message);
 
 /*
+ * Callback for streaming logical decoding DDL messages from in-progress
+ * transactions.
+ */
+typedef void (*LogicalDecodeStreamDDLMessageCB) (struct LogicalDecodingContext *ctx,
+												 ReorderBufferTXN *txn,
+												 XLogRecPtr message_lsn,
+												 const char *prefix,
+												 Oid relid,
+												 DeparsedCommandType cmdtype,
+												 Size message_size,
+												 const char *message);
+
+/*
  * Callback for streaming truncates from in-progress transactions.
  */
 typedef void (*LogicalDecodeStreamTruncateCB) (struct LogicalDecodingContext *ctx,
@@ -253,6 +265,7 @@ typedef struct OutputPluginCallbacks
 	LogicalDecodeStreamCommitCB stream_commit_cb;
 	LogicalDecodeStreamChangeCB stream_change_cb;
 	LogicalDecodeStreamMessageCB stream_message_cb;
+	LogicalDecodeStreamDDLMessageCB stream_ddl_cb;
 	LogicalDecodeStreamTruncateCB stream_truncate_cb;
 } OutputPluginCallbacks;
 
